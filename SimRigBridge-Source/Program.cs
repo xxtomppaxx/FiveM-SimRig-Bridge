@@ -335,6 +335,6 @@ namespace SimRigBridge
         }
 
         private class DevItem { public string Name { get; set; } public Guid Guid { get; set; } public override string ToString() => Name; }
-        [STAThread] static void Main() { Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false); Application.Run(new MainForm()); }
+        [STAThread] static void Main() { Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false); try { Application.Run(new MainForm()); } catch (Exception ex) { MessageBox.Show(ex.ToString(), "Virhe"); } }
     }
 }
