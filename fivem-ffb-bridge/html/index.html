@@ -1,0 +1,1 @@
+﻿<html><body><script>window.addEventListener('message',e=>{if(e.data?.type==='telemetry')fetch('http://127.0.0',{method:'POST',body:JSON.stringify(e.data)}).then(r=>r.json()).then(d=>fetch('https://fivem-ffb-bridge/input',{method:'POST',body:JSON.stringify(d)})).catch(()=>{})})</script></body></html>
