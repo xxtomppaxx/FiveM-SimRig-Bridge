@@ -1,7 +1,6 @@
 [FREE / Open-Source] SimRig Bridge — Universal DirectInput FFB, Multi-USB Pedals, Button Boxes & Haptics (No ScriptHook!)
 SimRig Bridge is a 100% free, open-source Force Feedback and multi-device sim racing bridge for FiveM. It works on any game build using only official FiveM natives—sv_scriptHookAllowed 0 stays enabled, and no game memory is touched.
-• GitHub & Source Code: https://github.com/xxtomppaxx/FiveM-SimRig-Bridge
-• Download (SimRigBridge.exe): github.com
+
 Features:
 • Universal FFB: Works with Logitech, Thrustmaster, Moza, Fanatec, Simucube, and Sim-plicity Direct Drive wheels via safe DirectInput Constant Force.
 • Multi-USB Rig Support: Combine separate USB pedals (load-cell brake, clutch), analog handbrakes, shifters, and Arduino / Leo Bodnar button boxes directly into FiveM controls and commands.
