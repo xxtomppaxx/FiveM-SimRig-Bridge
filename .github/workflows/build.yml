@@ -1,0 +1,20 @@
+name: Build SimRigBridge
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Publish EXE
+        run: dotnet publish SimRigBridge-Source/SimRigBridge.csproj -c Release -o publish
+      - name: Upload EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: SimRigBridge-v1.1
+          path: publish/SimRigBridge.exe
