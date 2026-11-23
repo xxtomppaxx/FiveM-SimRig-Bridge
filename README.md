@@ -10,4 +10,7 @@ Features:
 Quick Setup:
 • Server: Drop fivem-ffb-bridge into resources and add ensure fivem-ffb-bridge to server.cfg.
 • Player: Run SimRigBridge.exe, select your wheel, click Connect FFB, and drive. (Check "Invert Force" for Logitech wheels.)
+
+
+
 **Direct Download (`SimRigBridge.exe`):**https://github.com/xxtomppaxx/FiveM-SimRig-Bridge/releases/tag/v1.0.0
