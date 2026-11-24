@@ -10,5 +10,13 @@ Quick Setup:
 • Server: Drop fivem-ffb-bridge into resources and add ensure fivem-ffb-bridge to server.cfg.
 • Player: Run SimRigBridge.exe, select your wheel, click Connect FFB, and drive. (Check "Invert Force" for Logitech wheels.)
 
+## Direct Drive FFB & HidHide (Important)
+When FiveM starts, it takes control of all visible DirectInput game controllers and sends zero-force signals to them, which cancels out external Force Feedback.
+
+**Solution (One-time setup):**
+1. Download and install [HidHide](https://github.com/nefarius/hidhide) and reboot Windows.
+2. Open **HidHide Configuration Client** -> go to the **Applications** tab -> add **`SimRigBridge.exe`** to the allowed list (`+`).
+3. Go to the **Devices** tab -> check the box next to your steering wheel (e.g., **SW20 V3**) and enable **Enable device hiding**.
+4. FiveM will no longer see the wheel directly or override its FFB, while `SimRigBridge.exe` continues to work normally.
 
 
