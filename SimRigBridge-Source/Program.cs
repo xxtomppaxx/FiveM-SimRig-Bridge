@@ -443,8 +443,9 @@ namespace SimRigBridge
             new Thread(() => {
                 try
                 {
-                     var http = new HttpListener();
-                    http.Prefixes.Add("http://127.0.0");
+
+                    var http = new HttpListener();
+                    http.Prefixes.Add("http://127.0.0.1:8765/");
                     http.Start();
                     using var udp = new UdpClient();
                     while (running)
@@ -471,7 +472,6 @@ namespace SimRigBridge
                                         if (res.MessageType == WebSocketMessageType.Close) break;
                                         string body = Encoding.UTF8.GetString(buf, 0, res.Count);
                                         var d = string.IsNullOrWhiteSpace(body) ? new TelemetryData() : (JsonSerializer.Deserialize<TelemetryData>(body) ?? new());
-
                                         if (d.active && !d.inAir)
                                         {
                                             float g = cfg.Gain / 100f, cf = (cfg.Center / 100f) * 3500f, rf = (cfg.Road / 100f) * 2000f;
@@ -501,25 +501,6 @@ namespace SimRigBridge
                         }
 
                         ctx.Response.StatusCode = 200;
-                        ctx.Response.Close();
-                    }
-
-                        }
-                        else SetForce(0);
-
-                        if (cfg.UdpOn && d.active)
-                        {
-                            byte[] pkt = Encoding.UTF8.GetBytes(body);
-                            udp.Send(pkt, pkt.Length, "127.0.0.1", cfg.UdpPort);
-                        }
-
-                        string[] cmds;
-                        lock (pendingCmds) { cmds = pendingCmds.ToArray(); pendingCmds.Clear(); }
-
-                        var respObj = new { active = true, steer = ReadAxis(cfg.Steer, true), throt = ReadAxis(cfg.Throt, false), brake = ReadAxis(cfg.Brake, false), clutch = ReadAxis(cfg.Clutch, false), hb = ReadAxis(cfg.Hb, false), cmds };
-                        byte[] outBuf = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(respObj));
-                        ctx.Response.ContentType = "application/json";
-                        ctx.Response.OutputStream.Write(outBuf, 0, outBuf.Length);
                         ctx.Response.Close();
                     }
                 }
