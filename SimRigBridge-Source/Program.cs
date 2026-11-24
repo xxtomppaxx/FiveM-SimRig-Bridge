@@ -19,9 +19,9 @@ namespace SimRigBridge
     public class RigConfig
     {
         public Guid FfbDev { get; set; }
-        public int Gain { get; set; } = 85;
-        public int Center { get; set; } = 40;
-        public int Road { get; set; } = 50;
+        public int Gain { get; set; } = 35;
+        public int Center { get; set; } = 45;
+        public int Road { get; set; } = 25;
         public bool InvFfb { get; set; } = false;
         public bool UdpOn { get; set; } = true;
         public int UdpPort { get; set; } = 20777;
@@ -48,6 +48,7 @@ namespace SimRigBridge
 
     public class MainForm : Form
     {
+        private const int N5 = 5, N4096 = 4096, I0 = 0, I1 = 1, I2 = 2, I3 = 3, I4 = 4;
         private readonly string cfgPath = Path.Combine(AppContext.BaseDirectory, "rig_config.json");
         private RigConfig cfg = new();
         private DirectInput di = new();
@@ -62,11 +63,11 @@ namespace SimRigBridge
         private CheckBox invFfbChk = new(), udpChk = new();
         private ListBox btnList = new();
         private TextBox cmdBox = new();
-        private Panel[] axisBars = new Panel[5];
-        private int[] axisVals = new int[5];
+        private Panel[] axisBars = new Panel[N5];
+        private int[] axisVals = new int[N5];
         private long lastUiTick = 0;
-        private TrackBar[] minSlds = new TrackBar[5], maxSlds = new TrackBar[5];
-        private Label[] minLbls = new Label[5], maxLbls = new Label[5];
+        private TrackBar[] minSlds = new TrackBar[N5], maxSlds = new TrackBar[N5];
+        private Label[] minLbls = new Label[N5], maxLbls = new Label[N5];
 
         private string listenTarget = "";
         private Dictionary<Guid, int[]> baseAxes = new();
@@ -74,7 +75,7 @@ namespace SimRigBridge
         private int wizStep = 0;
         private Button skipBtn = new();
         private bool wasInGear = false;
-        private bool[] prevBtns = new bool[4096];
+        private bool[] prevBtns = new bool[N4096];
         private List<string> pendingCmds = new();
         private volatile bool running = true;
         public MainForm()
@@ -259,7 +260,7 @@ namespace SimRigBridge
         {
             ClearPrevBtns();
             wizQueue = steps; wizStep = 0; listenTarget = "wiz"; skipBtn.Visible = true;
-            statusLbl.Text = $"Velho (1/{wizQueue.Length}): Laita päälle -> {wizQueue[0]}";
+            statusLbl.Text = $"Velho (1/{wizQueue.Length}): Laita päälle -> {wizQueue.First()}";
         }
 
         private void NextWizardStep()
@@ -299,26 +300,35 @@ namespace SimRigBridge
                 ffbWheel.SetCooperativeLevel(Handle, CooperativeLevel.Background | CooperativeLevel.Exclusive);
                 ffbWheel.Acquire();
 
-                var ffbObjs = ffbWheel.GetObjects(DeviceObjectTypeFlags.ForceFeedbackActuator);
-                int axisId = ffbObjs.Count > 0 ? (int)ffbObjs.First().ObjectId : 0;
-
                 var effParams = new EffectParameters
                 {
                     Duration = int.MaxValue,
-                    Flags = EffectFlags.Cartesian | EffectFlags.ObjectIds,
+                    Flags = EffectFlags.Cartesian | EffectFlags.ObjectOffsets,
                     Gain = 10000,
                     SamplePeriod = 0,
                     TriggerButton = -1,
                     TriggerRepeatInterval = 0,
-                    Axes = new[] { axisId },
+                    Axes = new[] { (int)JoystickOffset.X },
                     Directions = new[] { 0 },
                     Parameters = new ConstantForce { Magnitude = 0 }
                 };
-                constEffect = new Effect(ffbWheel, EffectGuid.ConstantForce, effParams);
+
+                try
+                {
+                    constEffect = new Effect(ffbWheel, EffectGuid.ConstantForce, effParams);
+                }
+                catch
+                {
+                    var ffbObjs = ffbWheel.GetObjects(DeviceObjectTypeFlags.ForceFeedbackActuator);
+                    effParams.Flags = EffectFlags.Cartesian | EffectFlags.ObjectIds;
+                    effParams.Axes = new[] { ffbObjs.Count > 0 ? (int)ffbObjs.First().ObjectId : 2 };
+                    constEffect = new Effect(ffbWheel, EffectGuid.ConstantForce, effParams);
+                }
+
                 constEffect.Start(1);
                 cfg.FfbDev = guid;
                 SaveCfg();
-                statusLbl.Text = $"FFB yhdistetty: {ffbWheel.Information.InstanceName} (AxisId {axisId})";
+                statusLbl.Text = "FFB yhdistetty: " + ffbWheel.Information.InstanceName;
             }
             catch (Exception ex) { statusLbl.Text = "FFB-virhe: " + ex.Message; }
         }
@@ -415,12 +425,12 @@ namespace SimRigBridge
                         if (IsHandleCreated && Visible && now - lastUiTick >= 16)
                         {
                             lastUiTick = now;
-                            axisVals[0] = Math.Clamp((int)((ReadAxis(cfg.Steer, true) + 1f) * 50f), 0, 100);
-                            axisVals[1] = Math.Clamp((int)(ReadAxis(cfg.Throt, false) * 100f), 0, 100);
-                            axisVals[2] = Math.Clamp((int)(ReadAxis(cfg.Brake, false) * 100f), 0, 100);
-                            axisVals[3] = Math.Clamp((int)(ReadAxis(cfg.Clutch, false) * 100f), 0, 100);
-                            axisVals[4] = Math.Clamp((int)(ReadAxis(cfg.Hb, false) * 100f), 0, 100);
-                            BeginInvoke(() => { for (int k = 0; k < 5; k++) axisBars[k]?.Invalidate(); });
+                            axisVals[I0] = Math.Clamp((int)((ReadAxis(cfg.Steer, true) + 1f) * 50f), 0, 100);
+                            axisVals[I1] = Math.Clamp((int)(ReadAxis(cfg.Throt, false) * 100f), 0, 100);
+                            axisVals[I2] = Math.Clamp((int)(ReadAxis(cfg.Brake, false) * 100f), 0, 100);
+                            axisVals[I3] = Math.Clamp((int)(ReadAxis(cfg.Clutch, false) * 100f), 0, 100);
+                            axisVals[I4] = Math.Clamp((int)(ReadAxis(cfg.Hb, false) * 100f), 0, 100);
+                            BeginInvoke(() => { for (int k = 0; k < N5; k++) axisBars[k]?.Invalidate(); });
                         }
                     }
                     catch { }
@@ -441,6 +451,7 @@ namespace SimRigBridge
                         ctx.Response.AddHeader("Access-Control-Allow-Origin", "*");
                         ctx.Response.AddHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
                         ctx.Response.AddHeader("Access-Control-Allow-Headers", "Content-Type");
+                        ctx.Response.AddHeader("Access-Control-Allow-Private-Network", "true");
                         if (ctx.Request.HttpMethod == "OPTIONS") { ctx.Response.StatusCode = 200; ctx.Response.Close(); continue; }
 
                         using var r = new StreamReader(ctx.Request.InputStream);
