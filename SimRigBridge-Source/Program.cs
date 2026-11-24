@@ -75,7 +75,6 @@ namespace SimRigBridge
         private volatile bool running = true;
         private string listenTarget = "";
         private Dictionary<Guid, int[]> baseAxes = new();
-        private bool[] prevBtns = new bool[4000];
         private List<string> pendingCmds = new();
         private bool wasInGear = false;
         private int[] axisVals = new int[N5];
