@@ -1,9 +1,4 @@
-import os
-
-os.makedirs("generated", exist_ok=True)
-os.makedirs("temp", exist_ok=True)
-
-code_content = '''using System;
+using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
@@ -751,10 +746,3 @@ namespace SimRigBridge
         }
     }
 }
-'''
-
-filename = "generated/Program_v5_SharpDX_Fix.cs.txt"
-with open(filename, "w", encoding="utf-8") as f:
-    f.write(code_content)
-
-print("Saved:", filename, os.path.getsize(filename), "bytes")
