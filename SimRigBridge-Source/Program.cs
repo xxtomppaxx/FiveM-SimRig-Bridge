@@ -5,33 +5,46 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
+using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 using SharpDX.DirectInput;
-using System.Net.WebSockets;
-using System.Threading.Tasks;
 
 namespace SimRigBridge
 {
-    public class AxisBind { public Guid Dev { get; set; } public int Axis { get; set; } public bool Inv { get; set; } public int Min { get; set; } = 0; public int Max { get; set; } = 100; }
-    public class BtnBind { public Guid Dev { get; set; } public int Btn { get; set; } public string Cmd { get; set; } = ""; }
+    public class AxisBind
+    {
+        public Guid Dev { get; set; } = Guid.Empty;
+        public int Axis { get; set; } = -1;
+        public bool Inv { get; set; } = false;
+        public int Min { get; set; } = 0;
+        public int Max { get; set; } = 100;
+    }
+
+    public class BtnBind
+    {
+        public Guid Dev { get; set; } = Guid.Empty;
+        public int Btn { get; set; } = -1;
+        public string Cmd { get; set; } = "";
+    }
 
     public class RigConfig
     {
-        public Guid FfbDev { get; set; }
-        public int Gain { get; set; } = 35;
-        public int Center { get; set; } = 45;
-        public int Road { get; set; } = 25;
+        public Guid FfbDev { get; set; } = Guid.Empty;
+        public int Gain { get; set; } = 50;
+        public int Center { get; set; } = 85;
+        public int Road { get; set; } = 45;
         public bool InvFfb { get; set; } = false;
-        public bool UdpOn { get; set; } = true;
+        public bool UdpOn { get; set; } = false;
         public int UdpPort { get; set; } = 20777;
-        public AxisBind? Steer { get; set; }
-        public AxisBind? Throt { get; set; }
-        public AxisBind? Brake { get; set; }
-        public AxisBind? Clutch { get; set; }
-        public AxisBind? Hb { get; set; }
+        public AxisBind Steer { get; set; } = new();
+        public AxisBind Throt { get; set; } = new();
+        public AxisBind Brake { get; set; } = new();
+        public AxisBind Clutch { get; set; } = new();
+        public AxisBind Hb { get; set; } = new();
         public List<BtnBind> Btns { get; set; } = new();
     }
 
@@ -50,51 +63,189 @@ namespace SimRigBridge
 
     public class MainForm : Form
     {
-        private const int N5 = 5, N4096 = 4096, I0 = 0, I1 = 1, I2 = 2, I3 = 3, I4 = 4;
-        private readonly string cfgPath = Path.Combine(AppContext.BaseDirectory, "rig_config.json");
+        private const int I0 = 0, I1 = 1, I2 = 2, I3 = 3, I4 = 4, N5 = 5, N4096 = 4096;
+        private readonly string cfgPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "rig_config.json");
         private RigConfig cfg = new();
         private DirectInput di = new();
         private Dictionary<Guid, Joystick> sticks = new();
-        private List<DeviceInstance> devList = new();
         private Joystick? ffbWheel;
         private Effect? constEffect;
-
-        private ComboBox wheelBox = new();
-        private Label statusLbl = new(), bindStatusLbl = new();
-        private TrackBar gainSld = new(), centerSld = new(), roadSld = new();
-        private CheckBox invFfbChk = new(), udpChk = new();
-        private ListBox btnList = new();
-        private TextBox cmdBox = new();
-        private Panel[] axisBars = new Panel[N5];
-        private int[] axisVals = new int[N5];
-        private long lastUiTick = 0;
-        private TrackBar[] minSlds = new TrackBar[N5], maxSlds = new TrackBar[N5];
-        private Label[] minLbls = new Label[N5], maxLbls = new Label[N5];
-
+        private volatile int targetForce = 0;
+        private float smoothForce = 0f;
+        private volatile bool running = true;
         private string listenTarget = "";
         private Dictionary<Guid, int[]> baseAxes = new();
-        private string[] wizQueue = Array.Empty<string>();
-        private int wizStep = 0;
-        private Button skipBtn = new();
-        private bool wasInGear = false;
-        private bool[] prevBtns = new bool[N4096];
+        private bool[] prevBtns = new bool[4000];
         private List<string> pendingCmds = new();
-        private volatile bool running = true;
+        private bool wasInGear = false;
+        private int[] axisVals = new int[N5];
+        private Panel[] axisBars = new Panel[N5];
+        private long lastUiTick = 0;
+
+        private ComboBox ffbCombo = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 360 };
+        private TrackBar gainBar = new() { Minimum = 0, Maximum = 100, Width = 280 };
+        private TrackBar centerBar = new() { Minimum = 0, Maximum = 100, Width = 280 };
+        private TrackBar roadBar = new() { Minimum = 0, Maximum = 100, Width = 280 };
+        private CheckBox invFfbChk = new() { Text = "Käännä FFB-suunta (Invert Force)", AutoSize = true };
+        private CheckBox udpChk = new() { Text = "SimHub UDP-lähetys (127.0.0.1)", AutoSize = true };
+        private NumericUpDown udpPortBox = new() { Minimum = 1024, Maximum = 65535, Value = 20777, Width = 80 };
+        private Label statusLbl = new() { AutoSize = true, ForeColor = Color.DarkBlue };
+        private Label bindStatusLbl = new() { AutoSize = true, ForeColor = Color.DarkGreen };
+        private ListBox btnList = new() { Width = 440, Height = 150 };
+        private TextBox cmdBox = new() { Width = 180, Text = "gear_up" };
+        private Label wizLbl = new() { AutoSize = true, Font = new Font("Segoe UI", 9.5f, FontStyle.Bold), ForeColor = Color.DarkRed };
+        private string[] wizQueue = { "gear_1", "gear_2", "gear_3", "gear_4", "gear_5", "gear_6", "gear_r" };
+        private int wizStep = 0;
         public MainForm()
         {
-            Text = "TompanServeri SimRig Bridge v1.3 (FFB + Pedals + Shifters + Boxes + VAM/HF8)";
-            Size = new Size(640, 560);
-            FormBorderStyle = FormBorderStyle.FixedSingle;
+            Text = "SimRig FiveM Bridge & FFB (SW20 V3 / Moza / Simjack)";
+            Size = new Size(560, 520);
+            FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
-            BackColor = Color.FromArgb(24, 24, 28);
-            ForeColor = Color.White;
-
             LoadCfg();
-            LoadDevices();
-            BuildUI();
-            if (cfg.FfbDev != Guid.Empty) ConnectFFB(cfg.FfbDev);
+
+            var tabs = new TabControl { Dock = DockStyle.Fill };
+            var t1 = new TabPage("1. Ratti & FFB");
+            var t2 = new TabPage("2. Polkimet & Käsijarru");
+            var t3 = new TabPage("3. Vaihteet & Napit");
+            tabs.TabPages.AddRange(new[] { t1, t2, t3 });
+            Controls.Add(tabs);
+
+            // Välilehti 1: Ratti & FFB
+            var p1 = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, Padding = new Padding(12), WrapContents = false };
+            p1.Controls.Add(new Label { Text = "Force Feedback -laite (SW20 V3):", AutoSize = true });
+            var rowFfb = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight };
+            var btnConn = new Button { Text = "Yhdistä FFB", Width = 100 };
+            var btnTest = new Button { Text = "Testaa FFB", Width = 95 };
+            rowFfb.Controls.AddRange(new Control[] { ffbCombo, btnConn, btnTest });
+            p1.Controls.Add(rowFfb);
+
+            gainBar.Value = cfg.Gain; centerBar.Value = cfg.Center; roadBar.Value = cfg.Road;
+            invFfbChk.Checked = cfg.InvFfb; udpChk.Checked = cfg.UdpOn; udpPortBox.Value = cfg.UdpPort;
+
+            p1.Controls.Add(MakeSliderRow("Kokonaisvoima (Gain %):", gainBar, v => { cfg.Gain = v; SaveCfg(); }));
+            p1.Controls.Add(MakeSliderRow("Keskitys / Drift-palautus (%):", centerBar, v => { cfg.Center = v; SaveCfg(); }));
+            p1.Controls.Add(MakeSliderRow("Tienpinta / Töyssyt (%):", roadBar, v => { cfg.Road = v; SaveCfg(); }));
+            invFfbChk.CheckedChanged += (_, _) => { cfg.InvFfb = invFfbChk.Checked; SaveCfg(); };
+            p1.Controls.Add(invFfbChk);
+
+            var rowUdp = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight };
+            udpChk.CheckedChanged += (_, _) => { cfg.UdpOn = udpChk.Checked; SaveCfg(); };
+            udpPortBox.ValueChanged += (_, _) => { cfg.UdpPort = (int)udpPortBox.Value; SaveCfg(); };
+            rowUdp.Controls.AddRange(new Control[] { udpChk, udpPortBox });
+            p1.Controls.Add(rowUdp);
+
+            statusLbl.Text = "Valmis (portti 8765)";
+            p1.Controls.Add(statusLbl);
+            t1.Controls.Add(p1);
+
+            btnConn.Click += (_, _) =>
+            {
+                if (ffbCombo.SelectedItem is DevItem item) { cfg.FfbDev = item.Id; SaveCfg(); ConnectFFB(item.Id); }
+            };
+            btnTest.Click += (_, _) =>
+            {
+                if (constEffect == null) { statusLbl.Text = "Yhdistä FFB ensin!"; return; }
+                Task.Run(() =>
+                {
+                    targetForce = 3500; Thread.Sleep(250);
+                    targetForce = -3500; Thread.Sleep(250);
+                    targetForce = 0;
+                });
+            };
+            // Välilehti 2: Polkimet & Käsijarru
+            var p2 = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, Padding = new Padding(12), WrapContents = false };
+            p2.Controls.Add(MakeAxisRow("Ohjaus (Steer):", "steer", cfg.Steer, I0));
+            p2.Controls.Add(MakeAxisRow("Kaasu (Throttle):", "throt", cfg.Throt, I1));
+            p2.Controls.Add(MakeAxisRow("Jarru (Brake):", "brake", cfg.Brake, I2));
+            p2.Controls.Add(MakeAxisRow("Kytkin (Clutch):", "clutch", cfg.Clutch, I3));
+            p2.Controls.Add(MakeAxisRow("Käsijarru:", "hb", cfg.Hb, I4));
+            p2.Controls.Add(bindStatusLbl);
+            t2.Controls.Add(p2);
+
+            // Välilehti 3: Vaihteet & Napit
+            var p3 = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, Padding = new Padding(12), WrapContents = false };
+            var rowWiz = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight };
+            var btnWiz = new Button { Text = "H-Kaavio Ohjattu Asetus (1-6 + R)", Width = 230 };
+            var btnClear = new Button { Text = "Tyhjennä valittu", Width = 120 };
+            rowWiz.Controls.AddRange(new Control[] { btnWiz, btnClear });
+            p3.Controls.Add(rowWiz);
+            p3.Controls.Add(wizLbl);
+
+            var rowCmd = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight };
+            var btnBind = new Button { Text = "Tunnista nappi/vaihde", Width = 155 };
+            rowCmd.Controls.AddRange(new Control[] { new Label { Text = "Komento:", AutoSize = true }, cmdBox, btnBind });
+            p3.Controls.Add(rowCmd);
+            p3.Controls.Add(btnList);
+            t3.Controls.Add(p3);
+
+            btnWiz.Click += (_, _) => { wizStep = 0; listenTarget = "wiz"; wizLbl.Text = "Kytke nyt 1. VAIHDE..."; };
+            btnBind.Click += (_, _) => { listenTarget = "btn"; wizLbl.Text = $"Paina nappia tai vaihdetta komennolle: {cmdBox.Text}"; };
+            btnClear.Click += (_, _) =>
+            {
+                if (btnList.SelectedIndex >= 0 && btnList.SelectedIndex < cfg.Btns.Count)
+                { cfg.Btns.RemoveAt(btnList.SelectedIndex); SaveCfg(); RefreshBtnList(); }
+            };
+
+            RefreshBtnList();
+            InitDevices();
             StartLoops();
-            FormClosing += (s, e) => { running = false; constEffect?.Stop(); };
+
+            var ffbTimer = new System.Windows.Forms.Timer { Interval = 30 };
+            ffbTimer.Tick += (_, _) => { if (running && constEffect != null) SetForce(targetForce); };
+            ffbTimer.Start();
+
+            FormClosing += (_, _) => { running = false; SetForce(0); constEffect?.Dispose(); ffbWheel?.Unacquire(); };
+        }
+        private void NextWizardStep()
+        {
+            wizStep++;
+            if (wizStep >= wizQueue.Length) { listenTarget = ""; wizLbl.Text = "H-Kaavio 1-6 + R tallennettu!"; return; }
+            string lbl = wizQueue[wizStep] == "gear_r" ? "PERUUTUSVAIHDE (R)" : $"{wizStep + 1}. VAIHDE";
+            wizLbl.Text = $"Kytke nyt {lbl}...";
+        }
+
+        private Control MakeSliderRow(string title, TrackBar tb, Action<int> onChg)
+        {
+            var p = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight };
+            var lbl = new Label { Text = $"{title} {tb.Value}", Width = 195 };
+            tb.ValueChanged += (_, _) => { lbl.Text = $"{title} {tb.Value}"; onChg(tb.Value); };
+            p.Controls.AddRange(new Control[] { lbl, tb });
+            return p;
+        }
+
+        private Control MakeAxisRow(string name, string key, AxisBind bind, int idx)
+        {
+            var p = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight };
+            var btn = new Button { Text = "Tunnista", Width = 75 };
+            var chk = new CheckBox { Text = "Käännä", Checked = bind.Inv, AutoSize = true };
+            var minN = new NumericUpDown { Minimum = 0, Maximum = 95, Value = bind.Min, Width = 48 };
+            var maxN = new NumericUpDown { Minimum = 5, Maximum = 100, Value = bind.Max, Width = 48 };
+            var bar = new Panel { Width = 110, Height = 16, BorderStyle = BorderStyle.FixedSingle, BackColor = Color.White };
+            axisBars[idx] = bar;
+            bar.Paint += (_, e) =>
+            {
+                int w = (int)(bar.Width * (axisVals[idx] / 100f));
+                e.Graphics.FillRectangle(Brushes.DodgerBlue, 0, 0, w, bar.Height);
+            };
+            btn.Click += (_, _) =>
+            {
+                baseAxes.Clear();
+                foreach (var kv in sticks) { kv.Value.Poll(); baseAxes[kv.Key] = GetAxes(kv.Value.GetCurrentState()); }
+                listenTarget = key;
+                bindStatusLbl.Text = $"Liikuta akselia: {name}";
+            };
+            chk.CheckedChanged += (_, _) => { bind.Inv = chk.Checked; SaveCfg(); };
+            minN.ValueChanged += (_, _) => { bind.Min = (int)minN.Value; SaveCfg(); };
+            maxN.ValueChanged += (_, _) => { bind.Max = (int)maxN.Value; SaveCfg(); };
+            p.Controls.AddRange(new Control[] { new Label { Text = name, Width = 115 }, btn, chk, new Label { Text = "Min", AutoSize = true }, minN, new Label { Text = "Max", AutoSize = true }, maxN, bar });
+            return p;
+        }
+
+        private void RefreshBtnList()
+        {
+            btnList.Items.Clear();
+            foreach (var b in cfg.Btns) btnList.Items.Add($"{b.Cmd}  ->  Nappi {b.Btn} ({b.Dev.ToString().Substring(0, 6)})");
         }
 
         private void LoadCfg()
@@ -109,201 +260,41 @@ namespace SimRigBridge
             catch { }
         }
 
-        private void LoadDevices()
+        private class DevItem { public Guid Id; public string Name = ""; public override string ToString() => Name; }
+
+        private void InitDevices()
         {
-            foreach (var j in sticks.Values) { try { j.Unacquire(); j.Dispose(); } catch { } }
-            sticks.Clear();
-            devList.Clear();
-            foreach (var d in di.GetDevices(DeviceClass.GameControl, DeviceEnumerationFlags.AttachedOnly))
+            ffbCombo.Items.Clear();
+            foreach (var dev in di.GetDevices(DeviceClass.GameControl, DeviceEnumerationFlags.AttachedOnly))
             {
                 try
                 {
-                    var j = new Joystick(di, d.InstanceGuid);
-                    j.Properties.BufferSize = 128;
-                    j.Acquire();
-                    sticks[d.InstanceGuid] = j;
-                    devList.Add(d);
+                    var joy = new Joystick(di, dev.InstanceGuid);
+                    joy.SetCooperativeLevel(this.Handle, CooperativeLevel.Background | CooperativeLevel.NonExclusive);
+                    joy.Acquire();
+                    sticks[dev.InstanceGuid] = joy;
+                    ffbCombo.Items.Add(new DevItem { Id = dev.InstanceGuid, Name = dev.InstanceName });
                 }
                 catch { }
             }
-            if (wheelBox.IsHandleCreated)
-            {
-                wheelBox.Items.Clear();
-                foreach (var d in devList) wheelBox.Items.Add(d.InstanceName);
-                int idx = devList.FindIndex(x => x.InstanceGuid == cfg.FfbDev);
-                if (idx >= 0) wheelBox.SelectedIndex = idx;
-                else if (wheelBox.Items.Count > 0) wheelBox.SelectedIndex = 0;
-            }
-        }
-        private void BuildUI()
-        {
-            var tabs = new TabControl { Dock = DockStyle.Top, Height = 485 };
-            var t1 = new TabPage("1. Ratti & FFB") { BackColor = BackColor };
-            var t2 = new TabPage("2. Polkimet & Käsijarru") { BackColor = BackColor };
-            var t3 = new TabPage("3. Vaihteet, Boxit & VAM/HF8") { BackColor = BackColor };
-
-            var l1 = new Label { Text = "Valitse FFB-ratti:", Location = new Point(15, 15), AutoSize = true };
-            wheelBox = new ComboBox { Location = new Point(15, 38), Width = 235, DropDownStyle = ComboBoxStyle.DropDownList };
-            foreach (var d in devList) wheelBox.Items.Add(d.InstanceName);
-            int idx = devList.FindIndex(x => x.InstanceGuid == cfg.FfbDev);
-            if (idx >= 0) wheelBox.SelectedIndex = idx;
-            else if (wheelBox.Items.Count > 0) wheelBox.SelectedIndex = 0;
-
-            var connBtn = new Button { Text = "Yhdistä FFB", Location = new Point(258, 37), Width = 95, Height = 27, BackColor = Color.FromArgb(0, 120, 215), FlatStyle = FlatStyle.Flat };
-            connBtn.Click += (s, e) => { if (wheelBox.SelectedIndex >= 0) ConnectFFB(devList[wheelBox.SelectedIndex].InstanceGuid); };
-
-            var testBtn = new Button { Text = "Testaa FFB", Location = new Point(360, 37), Width = 95, Height = 27, BackColor = Color.FromArgb(60, 60, 70), FlatStyle = FlatStyle.Flat };
-            testBtn.Click += (s, e) => TestFFB();
-
-            var refBtn = new Button { Text = "Päivitä laitteet", Location = new Point(462, 37), Width = 135, Height = 27, BackColor = Color.FromArgb(55, 85, 65), FlatStyle = FlatStyle.Flat };
-            refBtn.Click += (s, e) => { LoadDevices(); statusLbl.Text = "USB-laitteet päivitetty (" + sticks.Count + " kpl)"; };
-
-            gainSld = AddSlider(t1, "Kokonaisvoima (Gain %):", 85, cfg.Gain, v => { cfg.Gain = v; SaveCfg(); });
-            centerSld = AddSlider(t1, "Keskitys / Drift-palautus (%):", 155, cfg.Center, v => { cfg.Center = v; SaveCfg(); });
-            roadSld = AddSlider(t1, "Tienpinta / Töyssyt (%):", 225, cfg.Road, v => { cfg.Road = v; SaveCfg(); });
-
-            invFfbChk = new CheckBox { Text = "Käännä FFB-suunta (Invert Force)", Location = new Point(15, 300), Checked = cfg.InvFfb, AutoSize = true };
-            invFfbChk.CheckedChanged += (s, e) => { cfg.InvFfb = invFfbChk.Checked; SaveCfg(); };
-            t1.Controls.AddRange(new Control[] { l1, wheelBox, connBtn, testBtn, refBtn, invFfbChk });
-
-            bindStatusLbl = new Label { Text = "Klikkaa nappia ja liikuta haluttua poljinta / rattia / käsijarrua:", Location = new Point(15, 15), AutoSize = true, ForeColor = Color.SkyBlue };
-            t2.Controls.Add(bindStatusLbl);
-
-            string[] names = { "Ohjaus (Steer)", "Kaasu (Throttle)", "Jarru (Brake)", "Kytkin (Clutch)", "Käsijarru (Handbrake)" };
-            string[] keys = { "steer", "throt", "brake", "clutch", "hb" };
-            for (int i = 0; i < names.Length; i++)
-            {
-                int i2 = i;
-                string k = keys[i];
-                int y = 45 + i * 82;
-                var b = new Button { Text = $"Tunnista: {names[i]}", Location = new Point(15, y), Width = 190, Height = 28, BackColor = Color.FromArgb(55, 55, 65), FlatStyle = FlatStyle.Flat };
-                b.Click += (s, e) => StartAxisListen(k);
-                var invB = new Button { Text = "Käännä", Location = new Point(212, y), Width = 75, Height = 28, BackColor = Color.FromArgb(45, 45, 50), FlatStyle = FlatStyle.Flat };
-                invB.Click += (s, e) => ToggleInvert(k);
-
-                int barIdx = i2;
-                axisBars[i2] = new Panel { Location = new Point(295, y + 2), Width = 310, Height = 24, BackColor = Color.FromArgb(40, 40, 48) };
-                axisBars[i2].Paint += (s, pe) => { int w = (int)(310 * (axisVals[barIdx] / 100f)); pe.Graphics.FillRectangle(Brushes.DeepSkyBlue, 0, 0, w, 24); };
-
-                var ab = GetBind(k);
-                minLbls[i2] = new Label { Text = $"Min: {ab?.Min ?? 0}%", Location = new Point(15, y + 34), Width = 75, AutoSize = false };
-                minSlds[i2] = new TrackBar { Location = new Point(90, y + 30), Width = 195, Maximum = 95, TickStyle = TickStyle.None, Value = ab?.Min ?? 0 };
-                minSlds[i2].ValueChanged += (s, e) => { var x = GetBind(k); if (x != null) { x.Min = minSlds[i2].Value; minLbls[i2].Text = $"Min: {x.Min}%"; SaveCfg(); } };
-
-                maxLbls[i2] = new Label { Text = $"Max: {ab?.Max ?? 100}%", Location = new Point(295, y + 34), Width = 80, AutoSize = false };
-                maxSlds[i2] = new TrackBar { Location = new Point(375, y + 30), Width = 230, Minimum = 5, Maximum = 100, TickStyle = TickStyle.None, Value = ab?.Max ?? 100 };
-                maxSlds[i2].ValueChanged += (s, e) => { var x = GetBind(k); if (x != null) { x.Max = maxSlds[i2].Value; maxLbls[i2].Text = $"Max: {x.Max}%"; SaveCfg(); } };
-
-                t2.Controls.AddRange(new Control[] { b, invB, axisBars[i2], minLbls[i2], minSlds[i2], maxLbls[i2], maxSlds[i2] });
-            }
-
-            udpChk = new CheckBox { Text = "Haptiikka UDP (SimHub / Simsonn VAM / NLR HF8 - portti 20777)", Location = new Point(15, 15), Checked = cfg.UdpOn, AutoSize = true, ForeColor = Color.LightGreen };
-            udpChk.CheckedChanged += (s, e) => { cfg.UdpOn = udpChk.Checked; SaveCfg(); };
-
-            var cmdLbl = new Label { Text = "Komento (esim. suomiradio_next, sk_flip, gear_up, gear_down):", Location = new Point(15, 50), AutoSize = true };
-            cmdBox = new TextBox { Location = new Point(15, 72), Width = 260, Text = "suomiradio_next" };
-            var addBtn = new Button { Text = "Paina nappia / Vaihdetta", Location = new Point(285, 70), Width = 190, Height = 26, BackColor = Color.FromArgb(0, 120, 215), FlatStyle = FlatStyle.Flat };
-            addBtn.Click += (s, e) => { ClearPrevBtns(); listenTarget = "btn"; statusLbl.Text = "Paina nyt haluttua nappia Boxissa tai vaihdekepissä..."; };
-
-            btnList = new ListBox { Location = new Point(15, 110), Width = 580, Height = 190 };
-            RefreshBtnList();
-
-            var delBtn = new Button { Text = "Poista valittu", Location = new Point(15, 315), Width = 115, Height = 28, BackColor = Color.DarkRed, FlatStyle = FlatStyle.Flat };
-            delBtn.Click += (s, e) => { if (btnList.SelectedIndex >= 0) { cfg.Btns.RemoveAt(btnList.SelectedIndex); SaveCfg(); RefreshBtnList(); } };
-
-            var hWizBtn = new Button { Text = "Velho: H-kaavio (R, 1–6)", Location = new Point(140, 315), Width = 165, Height = 28, BackColor = Color.FromArgb(0, 130, 90), FlatStyle = FlatStyle.Flat };
-            hWizBtn.Click += (s, e) => StartWizard(new[] { "gear_r", "gear_1", "gear_2", "gear_3", "gear_4", "gear_5", "gear_6" });
-
-            var sqWizBtn = new Button { Text = "Velho: SQ (Ylös/Alas)", Location = new Point(315, 315), Width = 145, Height = 28, BackColor = Color.FromArgb(0, 120, 180), FlatStyle = FlatStyle.Flat };
-            sqWizBtn.Click += (s, e) => StartWizard(new[] { "gear_up", "gear_down" });
-
-            skipBtn = new Button { Text = "Ohita", Location = new Point(470, 315), Width = 70, Height = 28, BackColor = Color.FromArgb(80, 80, 90), FlatStyle = FlatStyle.Flat, Visible = false };
-            skipBtn.Click += (s, e) => NextWizardStep();
-
-            t3.Controls.AddRange(new Control[] { udpChk, cmdLbl, cmdBox, addBtn, btnList, delBtn, hWizBtn, sqWizBtn, skipBtn });
-            tabs.TabPages.AddRange(new[] { t1, t2, t3 });
-
-            statusLbl = new Label { Text = "Valmis. Kytkettyjä USB-ohjaimia: " + sticks.Count, Dock = DockStyle.Bottom, Height = 30, TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(15, 0, 0, 0), ForeColor = Color.LightGreen };
-            Controls.AddRange(new Control[] { tabs, statusLbl });
-        }
-        private TrackBar AddSlider(TabPage p, string title, int y, int val, Action<int> onChange)
-        {
-            var l = new Label { Text = $"{title} {val}%", Location = new Point(15, y), AutoSize = true };
-            var tb = new TrackBar { Location = new Point(15, y + 20), Width = 580, Minimum = 0, Maximum = 150, Value = Math.Clamp(val, 0, 150), TickFrequency = 10 };
-            tb.ValueChanged += (s, e) => { l.Text = $"{title} {tb.Value}%"; onChange(tb.Value); };
-            p.Controls.AddRange(new Control[] { l, tb });
-            return tb;
-        }
-
-        private void ClearPrevBtns() => Array.Clear(prevBtns, 0, prevBtns.Length);
-
-        private void RefreshBtnList()
-        {
-            btnList.Items.Clear();
-            foreach (var b in cfg.Btns)
-            {
-                string devName = devList.FirstOrDefault(d => d.InstanceGuid == b.Dev)?.InstanceName ?? "USB";
-                string bLabel = b.Btn >= 1000 ? $"POV {(b.Btn - 1000) / 4500}" : $"Nappi {b.Btn + 1}";
-                btnList.Items.Add($"[{devName}] {bLabel} -> /{b.Cmd}");
-            }
-        }
-
-        private void StartAxisListen(string key)
-        {
-            baseAxes.Clear();
-            foreach (var kv in sticks) baseAxes[kv.Key] = GetAxes(kv.Value.GetCurrentState());
-            listenTarget = key;
-            bindStatusLbl.Text = $"Liikuta nyt: {key.ToUpper()}...";
-        }
-
-        private AxisBind? GetBind(string k) => k switch { "steer" => cfg.Steer, "throt" => cfg.Throt, "brake" => cfg.Brake, "clutch" => cfg.Clutch, "hb" => cfg.Hb, _ => null };
-
-        private void StartWizard(string[] steps)
-        {
-            ClearPrevBtns();
-            wizQueue = steps; wizStep = 0; listenTarget = "wiz"; skipBtn.Visible = true;
-            statusLbl.Text = $"Velho (1/{wizQueue.Length}): Laita päälle -> {wizQueue.First()}";
-        }
-
-        private void NextWizardStep()
-        {
-            ClearPrevBtns();
-            wizStep++;
-            if (wizStep >= wizQueue.Length) { listenTarget = ""; skipBtn.Visible = false; statusLbl.Text = "Vaihteiden tunnistus valmis!"; }
-            else statusLbl.Text = $"Velho ({wizStep + 1}/{wizQueue.Length}): Laita päälle -> {wizQueue[wizStep]}";
-        }
-
-        private void ToggleInvert(string k)
-        {
-            var ab = GetBind(k);
-            if (ab != null) { ab.Inv = !ab.Inv; SaveCfg(); bindStatusLbl.Text = $"{k} suunta käännetty ({ab.Inv})"; }
-        }
-
-        private int[] GetAxes(JoystickState s) => new[] { s.X, s.Y, s.Z, s.RotationX, s.RotationY, s.RotationZ, s.Sliders.ElementAtOrDefault(0), s.Sliders.ElementAtOrDefault(1) };
-
-        private float ReadAxis(AxisBind? b, bool centered)
-        {
-            if (b == null || !sticks.TryGetValue(b.Dev, out var j)) return 0f;
-            float norm = GetAxes(j.GetCurrentState())[b.Axis] / 65535f;
-            if (b.Inv) norm = 1f - norm;
-            if (centered) return (norm * 2f) - 1f;
-            float minF = b.Min / 100f, maxF = Math.Max(minF + 0.01f, b.Max / 100f);
-            return Math.Clamp((norm - minF) / (maxF - minF), 0f, 1f);
+            for (int i = 0; i < ffbCombo.Items.Count; i++)
+                if (((DevItem)ffbCombo.Items[i]!).Id == cfg.FfbDev) { ffbCombo.SelectedIndex = i; ConnectFFB(cfg.FfbDev); break; }
+            if (ffbCombo.SelectedIndex < 0 && ffbCombo.Items.Count > 0) ffbCombo.SelectedIndex = 0;
         }
 
         private void ConnectFFB(Guid guid)
         {
             try
             {
-                constEffect?.Stop();
-                constEffect?.Dispose();
-                ffbWheel?.Unacquire();
+                constEffect?.Dispose(); constEffect = null;
+                ffbWheel?.Unacquire(); ffbWheel?.Dispose(); ffbWheel = null;
                 ffbWheel = new Joystick(di, guid);
-                ffbWheel.SetCooperativeLevel(Handle, CooperativeLevel.Background | CooperativeLevel.Exclusive);
+                ffbWheel.SetCooperativeLevel(this.Handle, CooperativeLevel.Exclusive | CooperativeLevel.Background);
                 ffbWheel.Acquire();
                 ffbWheel.SendForceFeedbackCommand(ForceFeedbackCommand.Reset);
-
-                var effParams = new EffectParameters
+                var fx = ffbWheel.GetEffects(EffectType.ConstantForce);
+                if (fx.Count == 0) { statusLbl.Text = "Laite ei tue ConstantForce-efektiä."; return; }
+                var ep = new EffectParameters
                 {
                     Duration = int.MaxValue,
                     Flags = EffectFlags.Cartesian | EffectFlags.ObjectOffsets,
@@ -311,51 +302,51 @@ namespace SimRigBridge
                     SamplePeriod = 0,
                     TriggerButton = -1,
                     TriggerRepeatInterval = 0,
-                    Axes = new[] { (int)JoystickOffset.X },
+                    Axes = new[] { 0 },
                     Directions = new[] { 0 },
+                    Envelope = null,
                     Parameters = new ConstantForce { Magnitude = 0 }
                 };
-
-                try
-                {
-                    constEffect = new Effect(ffbWheel, EffectGuid.ConstantForce, effParams);
-                }
-                catch
-                {
-                    var ffbObjs = ffbWheel.GetObjects(DeviceObjectTypeFlags.ForceFeedbackActuator);
-                    effParams.Flags = EffectFlags.Cartesian | EffectFlags.ObjectIds;
-                    effParams.Axes = new[] { ffbObjs.Count > 0 ? (int)ffbObjs.First().ObjectId : 2 };
-                    constEffect = new Effect(ffbWheel, EffectGuid.ConstantForce, effParams);
-                }
-
-                constEffect.Start(1);
-                cfg.FfbDev = guid;
-                SaveCfg();
+                constEffect = new Effect(ffbWheel, fx.Guid, ep);
+                constEffect.Start(1, EffectPlayFlags.None);
                 statusLbl.Text = "FFB yhdistetty: " + ffbWheel.Information.InstanceName;
             }
             catch (Exception ex) { statusLbl.Text = "FFB-virhe: " + ex.Message; }
         }
-
-        private void TestFFB()
-        {
-            if (constEffect == null) return;
-            new Thread(() => {
-                SetForce(4500); Thread.Sleep(250);
-                SetForce(-4500); Thread.Sleep(250);
-                SetForce(0);
-            }).Start();
-        }
-
         private void SetForce(int mag)
         {
-            if (constEffect == null) return;
+            if (constEffect == null || ffbWheel == null) return;
+            smoothForce = (smoothForce * 0.45f) + (mag * 0.55f);
+            int val = Math.Clamp(cfg.InvFfb ? -(int)smoothForce : (int)smoothForce, -8500, 8500);
             try
             {
-                int val = Math.Clamp(cfg.InvFfb ? -mag : mag, -10000, 10000);
                 constEffect.SetParameters(new EffectParameters { Parameters = new ConstantForce { Magnitude = val } }, EffectParameterFlags.TypeSpecificParameters);
             }
-            catch { }
+            catch
+            {
+                try
+                {
+                    ffbWheel.Acquire();
+                    constEffect.Start(1, EffectPlayFlags.None);
+                }
+                catch { }
+            }
         }
+
+        private int[] GetAxes(JoystickState s) => new[] { s.X, s.Y, s.Z, s.RotationX, s.RotationY, s.RotationZ, s.Sliders, s.Sliders };
+
+        private float ReadAxis(AxisBind b, bool centered)
+        {
+            if (b.Axis < 0 || !sticks.TryGetValue(b.Dev, out var joy)) return 0f;
+            var ax = GetAxes(joy.GetCurrentState());
+            if (b.Axis >= ax.Length) return 0f;
+            float norm = ax[b.Axis] / 65535f;
+            if (b.Inv) norm = 1f - norm;
+            float lo = b.Min / 100f, hi = Math.Max(lo + 0.01f, b.Max / 100f);
+            norm = Math.Clamp((norm - lo) / (hi - lo), 0f, 1f);
+            return centered ? (norm * 2f - 1f) : norm;
+        }
+
         private void HandleBtnPress(Guid dev, int code)
         {
             if (listenTarget == "wiz")
@@ -374,7 +365,6 @@ namespace SimRigBridge
                 if (match != null) lock (pendingCmds) pendingCmds.Add(match.Cmd);
             }
         }
-
         private void StartLoops()
         {
             new Thread(() => {
@@ -445,7 +435,7 @@ namespace SimRigBridge
                 try
                 {
                     var http = new HttpListener();
-                    http.Prefixes.Add("http://127.0.0.1:8765/");
+                    http.Prefixes.Add("http://127.0.0:8765/");
                     http.Start();
                     using var udp = new UdpClient();
                     while (running)
@@ -493,9 +483,9 @@ namespace SimRigBridge
                                             float rpmVib = (d.speed < 3f) ? (float)Math.Sin(Environment.TickCount64 * 0.08 * (0.5f + d.rpm)) * 180f : 0f;
                                             float roadForce = (d.bump * rf) + skidVib + rpmVib;
 
-                                            SetForce((int)((alignForce + damping + roadForce) * g));
+                                            targetForce = (int)((alignForce + damping + roadForce) * g);
                                         }
-                                        else SetForce(0);
+                                        else targetForce = 0;
 
                                         if (cfg.UdpOn && d.active)
                                         {
