@@ -1,4 +1,9 @@
-using System;
+import os
+
+os.makedirs("generated", exist_ok=True)
+os.makedirs("temp", exist_ok=True)
+
+code_content = '''using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
@@ -414,8 +419,9 @@ namespace SimRigBridge
                 };
                 constEffect = new Effect(ffbWheel, fxConst[0].Guid, epConst);
 
-                var fxSpring = ffbWheel.GetEffects(EffectType.Spring);
-                if (fxSpring.Count > 0)
+                var allCondFx = ffbWheel.GetEffects(EffectType.Condition);
+                var fxSpring = allCondFx.FirstOrDefault(e => e.Guid == EffectGuid.Spring);
+                if (fxSpring != null)
                 {
                     var epSpring = new EffectParameters
                     {
@@ -430,11 +436,11 @@ namespace SimRigBridge
                         Envelope = null,
                         Parameters = BuildCondition(0, 10000)
                     };
-                    springEffect = new Effect(ffbWheel, fxSpring[0].Guid, epSpring);
+                    springEffect = new Effect(ffbWheel, fxSpring.Guid, epSpring);
                 }
 
-                var fxDamper = ffbWheel.GetEffects(EffectType.Damper);
-                if (fxDamper.Count > 0)
+                var fxDamper = allCondFx.FirstOrDefault(e => e.Guid == EffectGuid.Damper);
+                if (fxDamper != null)
                 {
                     var epDamper = new EffectParameters
                     {
@@ -449,7 +455,7 @@ namespace SimRigBridge
                         Envelope = null,
                         Parameters = BuildCondition(0, 10000)
                     };
-                    damperEffect = new Effect(ffbWheel, fxDamper[0].Guid, epDamper);
+                    damperEffect = new Effect(ffbWheel, fxDamper.Guid, epDamper);
                 }
 
                 statusLbl.Text = $"FFB yhdistetty: {ffbWheel.Information.InstanceName} (Spring={(springEffect != null ? "OK" : "-")}, Damper={(damperEffect != null ? "OK" : "-")})";
@@ -745,3 +751,10 @@ namespace SimRigBridge
         }
     }
 }
+'''
+
+filename = "generated/Program_v5_SharpDX_Fix.cs.txt"
+with open(filename, "w", encoding="utf-8") as f:
+    f.write(code_content)
+
+print("Saved:", filename, os.path.getsize(filename), "bytes")
