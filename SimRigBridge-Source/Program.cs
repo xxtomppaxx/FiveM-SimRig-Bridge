@@ -444,9 +444,8 @@ namespace SimRigBridge
             new Thread(() => {
                 try
                 {
-
                     var http = new HttpListener();
-                    http.Prefixes.Add("http://127.0.0.1:8765/");
+                    http.Prefixes.Add("http://127.0.0");
                     http.Start();
                     using var udp = new UdpClient();
                     while (running)
@@ -475,15 +474,8 @@ namespace SimRigBridge
                                         if (res.MessageType == WebSocketMessageType.Close) break;
                                         string body = Encoding.UTF8.GetString(buf, 0, res.Count);
                                         var d = string.IsNullOrWhiteSpace(body) ? new TelemetryData() : (JsonSerializer.Deserialize<TelemetryData>(body) ?? new());
-                                        if (d.active && !d.inAir)
-                                        {
-                                                                                    float curSteer = ReadAxis(cfg.Steer, true);
-                                        float steerVel = curSteer - prevSteer;
-                                        prevSteer = curSteer;
 
-                                        if (d.active && !d.inAir)
-                                        {
-                                                                                    float curSteer = ReadAxis(cfg.Steer, true);
+                                        float curSteer = ReadAxis(cfg.Steer, true);
                                         float steerVel = curSteer - prevSteer;
                                         prevSteer = curSteer;
 
@@ -544,4 +536,3 @@ namespace SimRigBridge
         }
     }
 }
-
