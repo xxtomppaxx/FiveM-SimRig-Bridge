@@ -81,6 +81,7 @@ namespace SimRigBridge
         private int[] axisVals = new int[N5];
         private Panel[] axisBars = new Panel[N5];
         private long lastUiTick = 0;
+private long lastTelemetryTick = 0;
 
         private ComboBox ffbCombo = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 360 };
         private TrackBar gainBar = new() { Minimum = 0, Maximum = 100, Width = 280 };
