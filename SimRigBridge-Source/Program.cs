@@ -36,8 +36,13 @@ namespace SimRigBridge
         public Guid FfbDev { get; set; } = Guid.Empty;
         public int Gain { get; set; } = 50;
         public int Center { get; set; } = 85;
+        public int Spring { get; set; } = 80;
+        public int Damper { get; set; } = 55;
         public int Road { get; set; } = 45;
+        public int SteerDeg { get; set; } = 900;
+        public int Softlock { get; set; } = 85;
         public bool InvFfb { get; set; } = false;
+        public bool InvSpring { get; set; } = false;
         public bool UdpOn { get; set; } = false;
         public int UdpPort { get; set; } = 20777;
         public AxisBind Steer { get; set; } = new();
@@ -68,10 +73,17 @@ namespace SimRigBridge
         private RigConfig cfg = new();
         private DirectInput di = new();
         private Dictionary<Guid, Joystick> sticks = new();
-       private bool[] prevBtns = new bool[4000];
+        private bool[] prevBtns = new bool[4000];
         private Joystick? ffbWheel;
         private Effect? constEffect;
+        private Effect? springEffect;
+        private Effect? damperEffect;
+        private bool effectsPlaying = false;
+        private HttpListener? httpServer;
+        private WebSocket? activeWs;
         private volatile int targetForce = 0;
+        private volatile int targetSpring = 0;
+        private volatile int targetDamper = 0;
         private float smoothForce = 0f;
         private volatile bool running = true;
         private string listenTarget = "";
@@ -81,13 +93,18 @@ namespace SimRigBridge
         private int[] axisVals = new int[N5];
         private Panel[] axisBars = new Panel[N5];
         private long lastUiTick = 0;
-private long lastTelemetryTick = 0;
+        private long lastTelemetryTick = 0;
 
         private ComboBox ffbCombo = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 360 };
         private TrackBar gainBar = new() { Minimum = 0, Maximum = 100, Width = 280 };
         private TrackBar centerBar = new() { Minimum = 0, Maximum = 100, Width = 280 };
+        private TrackBar springBar = new() { Minimum = 0, Maximum = 100, Width = 280 };
+        private TrackBar damperBar = new() { Minimum = 0, Maximum = 100, Width = 280 };
         private TrackBar roadBar = new() { Minimum = 0, Maximum = 100, Width = 280 };
+        private TrackBar degBar = new() { Minimum = 180, Maximum = 900, TickFrequency = 90, Width = 280 };
+        private TrackBar softlockBar = new() { Minimum = 0, Maximum = 100, Width = 280 };
         private CheckBox invFfbChk = new() { Text = "Käännä FFB-suunta (Invert Force)", AutoSize = true };
+        private CheckBox invSpringChk = new() { Text = "Käännä Spring-suunta (Invert Spring)", AutoSize = true };
         private CheckBox udpChk = new() { Text = "SimHub UDP-lähetys (127.0.0.1)", AutoSize = true };
         private NumericUpDown udpPortBox = new() { Minimum = 1024, Maximum = 65535, Value = 20777, Width = 80 };
         private Label statusLbl = new() { AutoSize = true, ForeColor = Color.DarkBlue };
@@ -97,10 +114,11 @@ private long lastTelemetryTick = 0;
         private Label wizLbl = new() { AutoSize = true, Font = new Font("Segoe UI", 9.5f, FontStyle.Bold), ForeColor = Color.DarkRed };
         private string[] wizQueue = { "gear_1", "gear_2", "gear_3", "gear_4", "gear_5", "gear_6", "gear_r" };
         private int wizStep = 0;
+
         public MainForm()
         {
             Text = "SimRig FiveM Bridge & FFB (SW20 V3 / Moza / Simjack)";
-            Size = new Size(560, 520);
+            Size = new Size(575, 690);
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
             LoadCfg();
@@ -114,21 +132,38 @@ private long lastTelemetryTick = 0;
 
             // Välilehti 1: Ratti & FFB
             var p1 = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, Padding = new Padding(12), WrapContents = false };
-            p1.Controls.Add(new Label { Text = "Force Feedback -laite (SW20 V3):", AutoSize = true });
+            p1.Controls.Add(new Label { Text = "Force Feedback -laite (SW20 V3 / DD / Belt):", AutoSize = true });
             var rowFfb = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight };
             var btnConn = new Button { Text = "Yhdistä FFB", Width = 100 };
             var btnTest = new Button { Text = "Testaa FFB", Width = 95 };
             rowFfb.Controls.AddRange(new Control[] { ffbCombo, btnConn, btnTest });
             p1.Controls.Add(rowFfb);
 
-            gainBar.Value = cfg.Gain; centerBar.Value = cfg.Center; roadBar.Value = cfg.Road;
-            invFfbChk.Checked = cfg.InvFfb; udpChk.Checked = cfg.UdpOn; udpPortBox.Value = cfg.UdpPort;
+            gainBar.Value = Math.Clamp(cfg.Gain, 0, 100);
+            centerBar.Value = Math.Clamp(cfg.Center, 0, 100);
+            springBar.Value = Math.Clamp(cfg.Spring, 0, 100);
+            damperBar.Value = Math.Clamp(cfg.Damper, 0, 100);
+            roadBar.Value = Math.Clamp(cfg.Road, 0, 100);
+            degBar.Value = Math.Clamp(cfg.SteerDeg, 180, 900);
+            softlockBar.Value = Math.Clamp(cfg.Softlock, 0, 100);
+            invFfbChk.Checked = cfg.InvFfb;
+            invSpringChk.Checked = cfg.InvSpring;
+            udpChk.Checked = cfg.UdpOn;
+            udpPortBox.Value = cfg.UdpPort;
 
             p1.Controls.Add(MakeSliderRow("Kokonaisvoima (Gain %):", gainBar, v => { cfg.Gain = v; SaveCfg(); }));
-            p1.Controls.Add(MakeSliderRow("Keskitys / Drift-palautus (%):", centerBar, v => { cfg.Center = v; SaveCfg(); }));
+            p1.Controls.Add(MakeSliderRow("Kaarre-G / Palautus (%):", centerBar, v => { cfg.Center = v; SaveCfg(); }));
+            p1.Controls.Add(MakeSliderRow("Keskitysjousi (Spring %):", springBar, v => { cfg.Spring = v; SaveCfg(); }));
+            p1.Controls.Add(MakeSliderRow("Vaimennus (Damper %):", damperBar, v => { cfg.Damper = v; SaveCfg(); }));
             p1.Controls.Add(MakeSliderRow("Tienpinta / Töyssyt (%):", roadBar, v => { cfg.Road = v; SaveCfg(); }));
+            p1.Controls.Add(MakeSliderRow("Kääntösäde (180–900°):", degBar, v => { cfg.SteerDeg = v; SaveCfg(); }, "°"));
+            p1.Controls.Add(MakeSliderRow("Softlock-rajoitin (%):", softlockBar, v => { cfg.Softlock = v; SaveCfg(); }));
+
+            var rowInv = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight };
             invFfbChk.CheckedChanged += (_, _) => { cfg.InvFfb = invFfbChk.Checked; SaveCfg(); };
-            p1.Controls.Add(invFfbChk);
+            invSpringChk.CheckedChanged += (_, _) => { cfg.InvSpring = invSpringChk.Checked; SaveCfg(); };
+            rowInv.Controls.AddRange(new Control[] { invFfbChk, invSpringChk });
+            p1.Controls.Add(rowInv);
 
             var rowUdp = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight };
             udpChk.CheckedChanged += (_, _) => { cfg.UdpOn = udpChk.Checked; SaveCfg(); };
@@ -149,11 +184,18 @@ private long lastTelemetryTick = 0;
                 if (constEffect == null) { statusLbl.Text = "Yhdistä FFB ensin!"; return; }
                 Task.Run(() =>
                 {
+                    lastTelemetryTick = Environment.TickCount64 + 600;
+                    targetSpring = (int)(5500 * (cfg.Spring / 100f));
+                    targetDamper = (int)(3500 * (cfg.Damper / 100f));
                     targetForce = 3500; Thread.Sleep(250);
                     targetForce = -3500; Thread.Sleep(250);
                     targetForce = 0;
+                    targetSpring = 0;
+                    targetDamper = 0;
+                    lastTelemetryTick = 0;
                 });
             };
+
             // Välilehti 2: Polkimet & Käsijarru
             var p2 = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, Padding = new Padding(12), WrapContents = false };
             p2.Controls.Add(MakeAxisRow("Ohjaus (Steer):", "steer", cfg.Steer, I0));
@@ -172,7 +214,6 @@ private long lastTelemetryTick = 0;
             rowWiz.Controls.AddRange(new Control[] { btnWiz, btnClear });
             p3.Controls.Add(rowWiz);
             p3.Controls.Add(wizLbl);
-
             var rowCmd = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight };
             var btnBind = new Button { Text = "Tunnista nappi/vaihde", Width = 155 };
             rowCmd.Controls.AddRange(new Control[] { new Label { Text = "Komento:", AutoSize = true }, cmdBox, btnBind });
@@ -192,24 +233,47 @@ private long lastTelemetryTick = 0;
             InitDevices();
             StartLoops();
 
-                        var ffbTimer = new System.Windows.Forms.Timer { Interval = 30 };
+            var ffbTimer = new System.Windows.Forms.Timer { Interval = 30 };
             ffbTimer.Tick += (_, _) =>
             {
                 if (!running || constEffect == null) return;
                 if (Environment.TickCount64 - lastTelemetryTick > 200)
                 {
-                    targetForce = 0;
-                    smoothForce = 0f;
-                    try { constEffect.Stop(); } catch { }
+                    if (effectsPlaying)
+                    {
+                        targetForce = 0;
+                        targetSpring = 0;
+                        targetDamper = 0;
+                        smoothForce = 0f;
+                        try { constEffect.Stop(); } catch { }
+                        try { springEffect?.Stop(); } catch { }
+                        try { damperEffect?.Stop(); } catch { }
+                        effectsPlaying = false;
+                    }
                     return;
                 }
-                SetForce(targetForce);
+                UpdateEffects(targetForce, targetSpring, targetDamper);
             };
             ffbTimer.Start();
 
-
-            FormClosing += (_, _) => { running = false; SetForce(0); constEffect?.Dispose(); ffbWheel?.Unacquire(); };
+            FormClosing += (_, _) =>
+            {
+                running = false;
+                ffbTimer.Stop();
+                try { activeWs?.Abort(); } catch { }
+                try { httpServer?.Stop(); httpServer?.Close(); } catch { }
+                if (effectsPlaying)
+                {
+                    UpdateEffects(0, 0, 0);
+                    effectsPlaying = false;
+                }
+                try { constEffect?.Stop(); constEffect?.Dispose(); } catch { }
+                try { springEffect?.Stop(); springEffect?.Dispose(); } catch { }
+                try { damperEffect?.Stop(); damperEffect?.Dispose(); } catch { }
+                try { ffbWheel?.Unacquire(); ffbWheel?.Dispose(); } catch { }
+            };
         }
+
         private void NextWizardStep()
         {
             wizStep++;
@@ -218,11 +282,11 @@ private long lastTelemetryTick = 0;
             wizLbl.Text = $"Kytke nyt {lbl}...";
         }
 
-        private Control MakeSliderRow(string title, TrackBar tb, Action<int> onChg)
+        private Control MakeSliderRow(string title, TrackBar tb, Action<int> onChg, string unit = "")
         {
             var p = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight };
-            var lbl = new Label { Text = $"{title} {tb.Value}", Width = 195 };
-            tb.ValueChanged += (_, _) => { lbl.Text = $"{title} {tb.Value}"; onChg(tb.Value); };
+            var lbl = new Label { Text = $"{title} {tb.Value}{unit}", Width = 205 };
+            tb.ValueChanged += (_, _) => { lbl.Text = $"{title} {tb.Value}{unit}"; onChg(tb.Value); };
             p.Controls.AddRange(new Control[] { lbl, tb });
             return p;
         }
@@ -295,19 +359,47 @@ private long lastTelemetryTick = 0;
             if (ffbCombo.SelectedIndex < 0 && ffbCombo.Items.Count > 0) ffbCombo.SelectedIndex = 0;
         }
 
+        private ConditionSet BuildCondition(int coeff, int sat = 10000)
+        {
+            int c = Math.Clamp(coeff, -10000, 10000);
+            int s = Math.Clamp(sat, 0, 10000);
+            return new ConditionSet
+            {
+                Conditions = new[]
+                {
+                    new Condition
+                    {
+                        Offset = 0,
+                        PositiveCoefficient = c,
+                        NegativeCoefficient = c,
+                        PositiveSaturation = s,
+                        NegativeSaturation = s,
+                        DeadBand = 0
+                    }
+                }
+            };
+        }
+
         private void ConnectFFB(Guid guid)
         {
             try
             {
+                effectsPlaying = false;
                 constEffect?.Dispose(); constEffect = null;
+                springEffect?.Dispose(); springEffect = null;
+                damperEffect?.Dispose(); damperEffect = null;
                 ffbWheel?.Unacquire(); ffbWheel?.Dispose(); ffbWheel = null;
+
                 ffbWheel = new Joystick(di, guid);
                 ffbWheel.SetCooperativeLevel(this.Handle, CooperativeLevel.Exclusive | CooperativeLevel.Background);
                 ffbWheel.Acquire();
                 ffbWheel.SendForceFeedbackCommand(ForceFeedbackCommand.Reset);
-                var fx = ffbWheel.GetEffects(EffectType.ConstantForce);
-                if (fx.Count == 0) { statusLbl.Text = "Laite ei tue ConstantForce-efektiä."; return; }
-                var ep = new EffectParameters
+                Thread.Sleep(80);
+
+                var fxConst = ffbWheel.GetEffects(EffectType.ConstantForce);
+                if (fxConst.Count == 0) { statusLbl.Text = "Laite ei tue ConstantForce-efektiä."; return; }
+
+                var epConst = new EffectParameters
                 {
                     Duration = int.MaxValue,
                     Flags = EffectFlags.Cartesian | EffectFlags.ObjectOffsets,
@@ -320,22 +412,81 @@ private long lastTelemetryTick = 0;
                     Envelope = null,
                     Parameters = new ConstantForce { Magnitude = 0 }
                 };
-                constEffect = new Effect(ffbWheel, fx[0].Guid, ep);
-                constEffect.Start(1, EffectPlayFlags.None);
-                statusLbl.Text = "FFB yhdistetty: " + ffbWheel.Information.InstanceName;
+                constEffect = new Effect(ffbWheel, fxConst[0].Guid, epConst);
+
+                var fxSpring = ffbWheel.GetEffects(EffectType.Spring);
+                if (fxSpring.Count > 0)
+                {
+                    var epSpring = new EffectParameters
+                    {
+                        Duration = int.MaxValue,
+                        Flags = EffectFlags.Cartesian | EffectFlags.ObjectOffsets,
+                        Gain = 10000,
+                        SamplePeriod = 0,
+                        TriggerButton = -1,
+                        TriggerRepeatInterval = 0,
+                        Axes = new[] { 0 },
+                        Directions = new[] { 0 },
+                        Envelope = null,
+                        Parameters = BuildCondition(0, 10000)
+                    };
+                    springEffect = new Effect(ffbWheel, fxSpring[0].Guid, epSpring);
+                }
+
+                var fxDamper = ffbWheel.GetEffects(EffectType.Damper);
+                if (fxDamper.Count > 0)
+                {
+                    var epDamper = new EffectParameters
+                    {
+                        Duration = int.MaxValue,
+                        Flags = EffectFlags.Cartesian | EffectFlags.ObjectOffsets,
+                        Gain = 10000,
+                        SamplePeriod = 0,
+                        TriggerButton = -1,
+                        TriggerRepeatInterval = 0,
+                        Axes = new[] { 0 },
+                        Directions = new[] { 0 },
+                        Envelope = null,
+                        Parameters = BuildCondition(0, 10000)
+                    };
+                    damperEffect = new Effect(ffbWheel, fxDamper[0].Guid, epDamper);
+                }
+
+                statusLbl.Text = $"FFB yhdistetty: {ffbWheel.Information.InstanceName} (Spring={(springEffect != null ? "OK" : "-")}, Damper={(damperEffect != null ? "OK" : "-")})";
             }
             catch (Exception ex) { statusLbl.Text = "FFB-virhe: " + ex.Message; }
         }
-              private void SetForce(int mag)
+
+        private void UpdateEffects(int mag, int springCoeff, int damperCoeff)
         {
             if (constEffect == null || ffbWheel == null) return;
-            smoothForce = (smoothForce * 0.45f) + (mag * 0.55f);
-            int val = Math.Clamp(cfg.InvFfb ? -(int)smoothForce : (int)smoothForce, -8500, 8500);
+            smoothForce = (smoothForce * 0.78f) + (mag * 0.22f);
+            int val = Math.Clamp(cfg.InvFfb ? -(int)smoothForce : (int)smoothForce, -9000, 9000);
+            int rawSpring = Math.Clamp(springCoeff, 0, 10000);
+            int sVal = cfg.InvSpring ? -rawSpring : rawSpring;
+            int dVal = Math.Clamp(damperCoeff, 0, 10000);
+
             try
             {
                 constEffect.SetParameters(new EffectParameters { Parameters = new ConstantForce { Magnitude = val } }, EffectParameterFlags.TypeSpecificParameters);
-                if ((constEffect.Status & EffectStatus.Playing) == 0)
+                if (!effectsPlaying || (constEffect.Status & EffectStatus.Playing) == 0)
                     constEffect.Start(1, EffectPlayFlags.None);
+
+                if (springEffect != null)
+                {
+                    springEffect.SetParameters(new EffectParameters { Parameters = BuildCondition(sVal, 10000) }, EffectParameterFlags.TypeSpecificParameters);
+                    if (!effectsPlaying || (springEffect.Status & EffectStatus.Playing) == 0)
+                        springEffect.Start(1, EffectPlayFlags.None);
+                }
+
+                if (damperEffect != null)
+                {
+                    damperEffect.SetParameters(new EffectParameters { Parameters = BuildCondition(dVal, 10000) }, EffectParameterFlags.TypeSpecificParameters);
+                    if (!effectsPlaying || (damperEffect.Status & EffectStatus.Playing) == 0)
+                        damperEffect.Start(1, EffectPlayFlags.None);
+                }
+
+                effectsPlaying = true;
             }
             catch
             {
@@ -343,13 +494,28 @@ private long lastTelemetryTick = 0;
                 {
                     ffbWheel.Acquire();
                     constEffect.Start(1, EffectPlayFlags.None);
+                    springEffect?.Start(1, EffectPlayFlags.None);
+                    damperEffect?.Start(1, EffectPlayFlags.None);
+                    effectsPlaying = true;
                 }
                 catch { }
             }
         }
 
+        private int[] GetAxes(JoystickState s) => new[] { s.X, s.Y, s.Z, s.RotationX, s.RotationY, s.RotationZ, s.Sliders[0], s.Sliders[1] };
 
-       private int[] GetAxes(JoystickState s) => new[] { s.X, s.Y, s.Z, s.RotationX, s.RotationY, s.RotationZ, s.Sliders[0], s.Sliders[1] };
+        private float ReadRawSteer()
+        {
+            AxisBind b = cfg.Steer;
+            if (b.Axis < 0 || !sticks.TryGetValue(b.Dev, out var joy)) return 0f;
+            var ax = GetAxes(joy.GetCurrentState());
+            if (b.Axis >= ax.Length) return 0f;
+            float norm = ax[b.Axis] / 65535f;
+            if (b.Inv) norm = 1f - norm;
+            float lo = b.Min / 100f, hi = Math.Max(lo + 0.01f, b.Max / 100f);
+            norm = Math.Clamp((norm - lo) / (hi - lo), 0f, 1f);
+            return norm * 2f - 1f;
+        }
 
         private float ReadAxis(AxisBind b, bool centered)
         {
@@ -360,7 +526,14 @@ private long lastTelemetryTick = 0;
             if (b.Inv) norm = 1f - norm;
             float lo = b.Min / 100f, hi = Math.Max(lo + 0.01f, b.Max / 100f);
             norm = Math.Clamp((norm - lo) / (hi - lo), 0f, 1f);
-            return centered ? (norm * 2f - 1f) : norm;
+            if (!centered) return norm;
+            float cVal = norm * 2f - 1f;
+            if (ReferenceEquals(b, cfg.Steer))
+            {
+                float ratio = Math.Clamp(cfg.SteerDeg / 900f, 0.2f, 1.0f);
+                cVal = Math.Clamp(cVal / ratio, -1f, 1f);
+            }
+            return cVal;
         }
 
         private void HandleBtnPress(Guid dev, int code)
@@ -381,6 +554,7 @@ private long lastTelemetryTick = 0;
                 if (match != null) lock (pendingCmds) pendingCmds.Add(match.Cmd);
             }
         }
+
         private void StartLoops()
         {
             new Thread(() => {
@@ -421,7 +595,6 @@ private long lastTelemetryTick = 0;
                             if (povDown && !prevBtns[povIdx]) HandleBtnPress(kv.Key, 1000 + pov);
                             prevBtns[povIdx] = povDown;
                         }
-
                         var hGears = cfg.Btns.Where(x => x.Cmd == "gear_r" || (x.Cmd.StartsWith("gear_") && x.Cmd.Length == 6 && char.IsDigit(x.Cmd.Last()))).ToList();
                         if (hGears.Count > 0)
                         {
@@ -429,7 +602,6 @@ private long lastTelemetryTick = 0;
                             if (anyHeld) wasInGear = true;
                             else if (wasInGear) { wasInGear = false; lock (pendingCmds) pendingCmds.Add("gear_n"); }
                         }
-
                         long now = Environment.TickCount64;
                         if (IsHandleCreated && Visible && now - lastUiTick >= 16)
                         {
@@ -450,66 +622,89 @@ private long lastTelemetryTick = 0;
             new Thread(() => {
                 try
                 {
-                    var http = new HttpListener();
-                    http.Prefixes.Add("http://127.0.0.1:8765/");
-                    http.Start();
+                    httpServer = new HttpListener();
+                    httpServer.Prefixes.Add("http://127.0.0.1:8765/");
+                    httpServer.Start();
                     using var udp = new UdpClient();
                     while (running)
                     {
-                        var ctx = http.GetContext();
+                        var ctx = httpServer.GetContext();
                         ctx.Response.AddHeader("Access-Control-Allow-Origin", "*");
                         ctx.Response.AddHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
                         ctx.Response.AddHeader("Access-Control-Allow-Headers", "Content-Type");
                         ctx.Response.AddHeader("Access-Control-Allow-Private-Network", "true");
                         if (ctx.Request.HttpMethod == "OPTIONS") { ctx.Response.StatusCode = 200; ctx.Response.Close(); continue; }
-
                         if (ctx.Request.IsWebSocketRequest)
                         {
                             _ = Task.Run(async () =>
                             {
                                 try
                                 {
+                                    var oldWs = activeWs;
+                                    if (oldWs != null) { try { oldWs.Abort(); } catch { } }
+
                                     var wsCtx = await ctx.AcceptWebSocketAsync(null);
                                     var ws = wsCtx.WebSocket;
+                                    activeWs = ws;
                                     var buf = new byte[N4096];
-                                    float prevSteer = 0f;
-
-                                    while (ws.State == WebSocketState.Open && running)
+                                    while (ws.State == WebSocketState.Open && running && ReferenceEquals(activeWs, ws))
                                     {
                                         var res = await ws.ReceiveAsync(new ArraySegment<byte>(buf), CancellationToken.None);
                                         if (res.MessageType == WebSocketMessageType.Close) break;
                                         string body = Encoding.UTF8.GetString(buf, 0, res.Count);
                                         var d = string.IsNullOrWhiteSpace(body) ? new TelemetryData() : (JsonSerializer.Deserialize<TelemetryData>(body) ?? new());
 
-                                        float curSteer = ReadAxis(cfg.Steer, true);
-                                        float steerVel = curSteer - prevSteer;
-                                        prevSteer = curSteer;
-
-                                                                                if (d.active && !d.inAir)
+                                        if (d.active && !d.inAir)
                                         {
                                             lastTelemetryTick = Environment.TickCount64;
                                             float g = cfg.Gain / 100f;
-                                            float cf = (cfg.Center / 100f) * 7500f;
+                                            float centerPct = cfg.Center / 100f;
+                                            float springPct = cfg.Spring / 100f;
+                                            float damperPct = cfg.Damper / 100f;
+                                            float softlockPct = cfg.Softlock / 100f;
                                             float rf = (cfg.Road / 100f) * 3500f;
 
                                             float safeLat = Math.Clamp(d.lateral, -2.0f, 2.0f);
                                             float safeBump = Math.Clamp(d.bump, -1.0f, 1.0f);
+                                            float speedNorm = Math.Clamp(d.speed / 35f, 0f, 1f);
 
-                                            float speedFactor = Math.Clamp(0.85f + (d.speed / 25f), 0.85f, 1.50f);
-                                            float linearCenter = (float)Math.Tanh(curSteer * 1.8f);
-                                            float alignForce = (-linearCenter * speedFactor * cf) - (safeLat * cf * 0.25f);
-                                            float damping = -steerVel * cf * 4.5f;
+                                            // 1) Rautatason Spring: heti 0 mm:stä lähtevä keskitys (skaalautuu kääntösäteen mukaan)
+                                            float degScale = Math.Clamp(900f / Math.Max(cfg.SteerDeg, 180), 1.0f, 2.2f);
+                                            float springBase = (0.35f + 0.65f * speedNorm) * springPct * 8500f * g * Math.Min(degScale, 1.5f);
+                                            targetSpring = Math.Clamp((int)springBase, 0, 9500);
 
+                                            // 2) Rautatason Damper: tasainen hydraulinen vaimennus
+                                            float damperBase = (0.45f + 0.35f * speedNorm) * damperPct * 6500f * g;
+                                            targetDamper = Math.Clamp((int)damperBase, 0, 8500);
+
+                                            // 3) ConstantForce: kaarre-G-voimat + tienpinnan töyssyt ja luistovärinä
+                                            float latForce = -safeLat * (2800f + 1800f * speedNorm) * centerPct;
                                             float skidVib = (d.skid > 1.2f) ? (float)Math.Sin(Environment.TickCount64 * 0.14) * Math.Min((d.skid - 1.2f) * 700f, 1500f) : 0f;
                                             float rpmVib = (d.speed < 3f) ? (float)Math.Sin(Environment.TickCount64 * 0.08 * (0.5f + d.rpm)) * 120f : 0f;
                                             float roadForce = (safeBump * rf) + skidVib + rpmVib;
 
-                                            targetForce = (int)((alignForce + damping + roadForce) * g);
+                                            // 4) Softlock-päätyrajoitin: jyrkkä palautusvoima, kun fyysinen kulma saavuttaa valitun kääntösäteen rajan
+                                            float rawSteer = ReadRawSteer();
+                                            float limitNorm = Math.Clamp(cfg.SteerDeg / 900f, 0.2f, 1.0f);
+                                            float softStart = Math.Max(limitNorm - 0.03f, 0.15f);
+                                            float absRaw = Math.Abs(rawSteer);
+                                            float softForce = 0f;
+                                            if (absRaw > softStart && softlockPct > 0.01f)
+                                            {
+                                                float over = (absRaw - softStart) / 0.06f;
+                                                float lockStrength = Math.Clamp(over * over, 0f, 1.25f) * 8500f * softlockPct;
+                                                softForce = -Math.Sign(rawSteer) * lockStrength;
+                                                targetDamper = Math.Clamp(targetDamper + (int)(2500f * softlockPct), 0, 9500);
+                                            }
+
+                                            targetForce = (int)(((latForce + roadForce) * g) + softForce);
                                         }
                                         else
                                         {
                                             lastTelemetryTick = 0;
                                             targetForce = 0;
+                                            targetSpring = 0;
+                                            targetDamper = 0;
                                             smoothForce = 0f;
                                         }
 
@@ -518,28 +713,25 @@ private long lastTelemetryTick = 0;
                                             byte[] pkt = Encoding.UTF8.GetBytes(body);
                                             udp.Send(pkt, pkt.Length, "127.0.0.1", cfg.UdpPort);
                                         }
-
-
                                         string[] cmds;
                                         lock (pendingCmds) { cmds = pendingCmds.ToArray(); pendingCmds.Clear(); }
-
                                         var respObj = new { active = true, steer = ReadAxis(cfg.Steer, true), throt = ReadAxis(cfg.Throt, false), brake = ReadAxis(cfg.Brake, false), clutch = ReadAxis(cfg.Clutch, false), hb = ReadAxis(cfg.Hb, false), cmds };
                                         byte[] outBuf = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(respObj));
                                         await ws.SendAsync(new ArraySegment<byte>(outBuf), WebSocketMessageType.Text, true, CancellationToken.None);
                                     }
+                                    if (ReferenceEquals(activeWs, ws)) activeWs = null;
                                 }
                                 catch { }
                             });
                             continue;
                         }
-
                         ctx.Response.StatusCode = 200;
                         ctx.Response.Close();
                     }
                 }
                 catch (Exception ex)
                 {
-                    if (IsHandleCreated) BeginInvoke(() => statusLbl.Text = "HTTP-virhe: " + ex.Message);
+                    if (running && IsHandleCreated) BeginInvoke(() => statusLbl.Text = "HTTP-virhe: " + ex.Message);
                 }
             }) { IsBackground = true }.Start();
         }
