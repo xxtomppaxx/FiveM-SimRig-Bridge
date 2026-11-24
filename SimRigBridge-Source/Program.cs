@@ -284,15 +284,20 @@ namespace SimRigBridge
             return Math.Clamp((norm - minF) / (maxF - minF), 0f, 1f);
         }
 
-        private void ConnectFFB(Guid guid)
+               private void ConnectFFB(Guid guid)
         {
             try
             {
                 constEffect?.Stop();
+                constEffect?.Dispose();
                 ffbWheel?.Unacquire();
                 ffbWheel = new Joystick(di, guid);
                 ffbWheel.SetCooperativeLevel(Handle, CooperativeLevel.Background | CooperativeLevel.Exclusive);
                 ffbWheel.Acquire();
+
+                var ffbObjs = ffbWheel.GetObjects(DeviceObjectTypeFlags.ForceFeedbackActuator);
+                int axisId = ffbObjs.Count > 0 ? ffbObjs.First().ObjectId : 0;
+
                 var effParams = new EffectParameters
                 {
                     Duration = int.MaxValue,
@@ -301,7 +306,7 @@ namespace SimRigBridge
                     SamplePeriod = 0,
                     TriggerButton = -1,
                     TriggerRepeatInterval = 0,
-                    Axes = new[] { 0 },
+                    Axes = new[] { axisId },
                     Directions = new[] { 0 },
                     Parameters = new ConstantForce { Magnitude = 0 }
                 };
@@ -309,10 +314,11 @@ namespace SimRigBridge
                 constEffect.Start(1);
                 cfg.FfbDev = guid;
                 SaveCfg();
-                statusLbl.Text = "FFB yhdistetty: " + ffbWheel.Information.InstanceName;
+                statusLbl.Text = $"FFB yhdistetty: {ffbWheel.Information.InstanceName} (AxisId {axisId})";
             }
             catch (Exception ex) { statusLbl.Text = "FFB-virhe: " + ex.Message; }
         }
+
 
         private void TestFFB()
         {
