@@ -12,4 +12,3 @@ Quick Setup:
 
 
 
-**Direct Download (`SimRigBridge.exe`):**https://github.com/xxtomppaxx/FiveM-SimRig-Bridge/releases/tag/v1.0.0
