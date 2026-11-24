@@ -65,8 +65,6 @@ namespace SimRigBridge
         private Panel[] axisBars = new Panel[5];
         private int[] axisVals = new int[5];
         private long lastUiTick = 0;
-
-
         private TrackBar[] minSlds = new TrackBar[5], maxSlds = new TrackBar[5];
         private Label[] minLbls = new Label[5], maxLbls = new Label[5];
 
@@ -79,7 +77,6 @@ namespace SimRigBridge
         private bool[] prevBtns = new bool[4096];
         private List<string> pendingCmds = new();
         private volatile bool running = true;
-
         public MainForm()
         {
             Text = "TompanServeri SimRig Bridge v1.3 (FFB + Pedals + Shifters + Boxes + VAM/HF8)";
@@ -180,7 +177,10 @@ namespace SimRigBridge
                 b.Click += (s, e) => StartAxisListen(k);
                 var invB = new Button { Text = "Käännä", Location = new Point(212, y), Width = 75, Height = 28, BackColor = Color.FromArgb(45, 45, 50), FlatStyle = FlatStyle.Flat };
                 invB.Click += (s, e) => ToggleInvert(k);
-                axisBars[i2] = new ProgressBar { Location = new Point(295, y + 2), Width = 310, Height = 24, Maximum = 100 };
+
+                int barIdx = i2;
+                axisBars[i2] = new Panel { Location = new Point(295, y + 2), Width = 310, Height = 24, BackColor = Color.FromArgb(40, 40, 48) };
+                axisBars[i2].Paint += (s, pe) => { int w = (int)(310 * (axisVals[barIdx] / 100f)); pe.Graphics.FillRectangle(Brushes.DeepSkyBlue, 0, 0, w, 24); };
 
                 var ab = GetBind(k);
                 minLbls[i2] = new Label { Text = $"Min: {ab?.Min ?? 0}%", Location = new Point(15, y + 34), Width = 75, AutoSize = false };
@@ -259,7 +259,7 @@ namespace SimRigBridge
         {
             ClearPrevBtns();
             wizQueue = steps; wizStep = 0; listenTarget = "wiz"; skipBtn.Visible = true;
-            statusLbl.Text = $"Velho (1/{wizQueue.Length}): Laita päälle -> {wizQueue.First()}";
+            statusLbl.Text = $"Velho (1/{wizQueue.Length}): Laita päälle -> {wizQueue[0]}";
         }
 
         private void NextWizardStep()
@@ -267,7 +267,7 @@ namespace SimRigBridge
             ClearPrevBtns();
             wizStep++;
             if (wizStep >= wizQueue.Length) { listenTarget = ""; skipBtn.Visible = false; statusLbl.Text = "Vaihteiden tunnistus valmis!"; }
-            else statusLbl.Text = $"Velho ({wizStep + 1}/{wizQueue.Length}): Laita päälle -> {wizQueue.ElementAt(wizStep)}";
+            else statusLbl.Text = $"Velho ({wizStep + 1}/{wizQueue.Length}): Laita päälle -> {wizQueue[wizStep]}";
         }
 
         private void ToggleInvert(string k)
@@ -288,7 +288,7 @@ namespace SimRigBridge
             return Math.Clamp((norm - minF) / (maxF - minF), 0f, 1f);
         }
 
-               private void ConnectFFB(Guid guid)
+        private void ConnectFFB(Guid guid)
         {
             try
             {
@@ -323,7 +323,6 @@ namespace SimRigBridge
             catch (Exception ex) { statusLbl.Text = "FFB-virhe: " + ex.Message; }
         }
 
-
         private void TestFFB()
         {
             if (constEffect == null) return;
@@ -348,7 +347,7 @@ namespace SimRigBridge
         {
             if (listenTarget == "wiz")
             {
-                string cmd = wizQueue.ElementAt(wizStep);
+                string cmd = wizQueue[wizStep];
                 Invoke(() => { cfg.Btns.RemoveAll(x => x.Cmd == cmd); cfg.Btns.Add(new BtnBind { Dev = dev, Btn = code, Cmd = cmd }); SaveCfg(); RefreshBtnList(); NextWizardStep(); });
             }
             else if (listenTarget == "btn")
@@ -407,26 +406,25 @@ namespace SimRigBridge
                         var hGears = cfg.Btns.Where(x => x.Cmd == "gear_r" || (x.Cmd.StartsWith("gear_") && x.Cmd.Length == 6 && char.IsDigit(x.Cmd.Last()))).ToList();
                         if (hGears.Count > 0)
                         {
-                            bool anyHeld = hGears.Any(g => sticks.TryGetValue(g.Dev, out var j) && ((g.Btn < 1000 && g.Btn < j.GetCurrentState().Buttons.Length && j.GetCurrentState().Buttons.ElementAt(g.Btn)) || (g.Btn >= 1000 && j.GetCurrentState().PointOfViewControllers.ElementAtOrDefault(0) == (g.Btn - 1000))));
+                            bool anyHeld = hGears.Any(g => sticks.TryGetValue(g.Dev, out var j) && ((g.Btn < 1000 && g.Btn < j.GetCurrentState().Buttons.Length && j.GetCurrentState().Buttons[g.Btn]) || (g.Btn >= 1000 && j.GetCurrentState().PointOfViewControllers.ElementAtOrDefault(0) == (g.Btn - 1000))));
                             if (anyHeld) wasInGear = true;
                             else if (wasInGear) { wasInGear = false; lock (pendingCmds) pendingCmds.Add("gear_n"); }
                         }
 
-                                             long now = Environment.TickCount64;
+                        long now = Environment.TickCount64;
                         if (IsHandleCreated && Visible && now - lastUiTick >= 16)
                         {
                             lastUiTick = now;
-                            axisVals.SetValue(Math.Clamp((int)((ReadAxis(cfg.Steer, true) + 1f) * 50f), 0, 100), 0);
-                            axisVals.SetValue(Math.Clamp((int)(ReadAxis(cfg.Throt, false) * 100f), 0, 100), 1);
-                            axisVals.SetValue(Math.Clamp((int)(ReadAxis(cfg.Brake, false) * 100f), 0, 100), 2);
-                            axisVals.SetValue(Math.Clamp((int)(ReadAxis(cfg.Clutch, false) * 100f), 0, 100), 3);
-                            axisVals.SetValue(Math.Clamp((int)(ReadAxis(cfg.Hb, false) * 100f), 0, 100), 4);
-                            BeginInvoke(() => { for (int k = 0; k < 5; k++) axisBars.ElementAt(k)?.Invalidate(); });
+                            axisVals[0] = Math.Clamp((int)((ReadAxis(cfg.Steer, true) + 1f) * 50f), 0, 100);
+                            axisVals[1] = Math.Clamp((int)(ReadAxis(cfg.Throt, false) * 100f), 0, 100);
+                            axisVals[2] = Math.Clamp((int)(ReadAxis(cfg.Brake, false) * 100f), 0, 100);
+                            axisVals[3] = Math.Clamp((int)(ReadAxis(cfg.Clutch, false) * 100f), 0, 100);
+                            axisVals[4] = Math.Clamp((int)(ReadAxis(cfg.Hb, false) * 100f), 0, 100);
+                            BeginInvoke(() => { for (int k = 0; k < 5; k++) axisBars[k]?.Invalidate(); });
                         }
                     }
                     catch { }
                     Thread.Sleep(1);
-
                 }
             }) { IsBackground = true }.Start();
 
