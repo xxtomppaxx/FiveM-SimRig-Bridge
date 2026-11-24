@@ -483,6 +483,12 @@ namespace SimRigBridge
 
                                         if (d.active && !d.inAir)
                                         {
+                                                                                    float curSteer = ReadAxis(cfg.Steer, true);
+                                        float steerVel = curSteer - prevSteer;
+                                        prevSteer = curSteer;
+
+                                        if (d.active && !d.inAir)
+                                        {
                                             float g = cfg.Gain / 100f;
                                             float cf = (cfg.Center / 100f) * 6500f;
                                             float rf = (cfg.Road / 100f) * 4500f;
@@ -498,7 +504,6 @@ namespace SimRigBridge
                                             SetForce((int)((alignForce + damping + roadForce) * g));
                                         }
                                         else SetForce(0);
-
 
                                         if (cfg.UdpOn && d.active)
                                         {
@@ -539,3 +544,4 @@ namespace SimRigBridge
         }
     }
 }
+
