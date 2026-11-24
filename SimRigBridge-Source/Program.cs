@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
@@ -13,24 +13,23 @@ using SharpDX.DirectInput;
 
 namespace SimRigBridge
 {
-        public class AxisBind { public Guid Dev { get; set; } public int Axis { get; set; } public bool Inv { get; set; } public int Min { get; set; } = 0; public int Max { get; set; } = 100; }
-
-    public class BtnBind { public Guid Dev { get; set; } public int Btn { get; set; } public string Cmd { get; set; } }
+    public class AxisBind { public Guid Dev { get; set; } public int Axis { get; set; } public bool Inv { get; set; } public int Min { get; set; } = 0; public int Max { get; set; } = 100; }
+    public class BtnBind { public Guid Dev { get; set; } public int Btn { get; set; } public string Cmd { get; set; } = ""; }
 
     public class RigConfig
     {
         public Guid FfbDev { get; set; }
-        public int Gain { get; set; } = 35;
-        public int Center { get; set; } = 60;
-        public int Road { get; set; } = 20;
-        public bool InvFfb { get; set; }
+        public int Gain { get; set; } = 85;
+        public int Center { get; set; } = 40;
+        public int Road { get; set; } = 50;
+        public bool InvFfb { get; set; } = false;
         public bool UdpOn { get; set; } = true;
         public int UdpPort { get; set; } = 20777;
-        public AxisBind Steer { get; set; }
-        public AxisBind Throt { get; set; }
-        public AxisBind Brake { get; set; }
-        public AxisBind Clutch { get; set; }
-        public AxisBind Hb { get; set; }
+        public AxisBind? Steer { get; set; }
+        public AxisBind? Throt { get; set; }
+        public AxisBind? Brake { get; set; }
+        public AxisBind? Clutch { get; set; }
+        public AxisBind? Hb { get; set; }
         public List<BtnBind> Btns { get; set; } = new();
     }
 
@@ -49,70 +48,89 @@ namespace SimRigBridge
 
     public class MainForm : Form
     {
+        private readonly string cfgPath = Path.Combine(AppContext.BaseDirectory, "rig_config.json");
+        private RigConfig cfg = new();
         private DirectInput di = new();
         private Dictionary<Guid, Joystick> sticks = new();
-        private RigConfig cfg = new();
-        private string cfgPath = "rig_config.json";
-        private Joystick ffbWheel;
-        private Effect ffbEffect;
-        private HttpListener http;
-        private UdpClient udp = new();
-        private bool running = true;
-        private string listenTarget = "";
-        private Dictionary<Guid, int[]> baseAxes = new();
-        private bool[] prevBtns = new bool[512];
-        private List<string> pendingCmds = new();
+        private List<DeviceInstance> devList = new();
+        private Joystick? ffbWheel;
+        private Effect? constEffect;
 
-        private ComboBox ffbCombo;
-        private CheckBox invFfbChk, udpChk;
-        private TrackBar gainSld, centSld, roadSld;
-        private Label statusLbl, bindStatusLbl;
-                private ListBox btnList;
-        private TextBox cmdBox;
+        private ComboBox wheelBox = new();
+        private Label statusLbl = new(), bindStatusLbl = new();
+        private TrackBar gainSld = new(), centerSld = new(), roadSld = new();
+        private CheckBox invFfbChk = new(), udpChk = new();
+        private ListBox btnList = new();
+        private TextBox cmdBox = new();
         private ProgressBar[] axisBars = new ProgressBar[5];
         private TrackBar[] minSlds = new TrackBar[5], maxSlds = new TrackBar[5];
         private Label[] minLbls = new Label[5], maxLbls = new Label[5];
+
+        private string listenTarget = "";
+        private Dictionary<Guid, int[]> baseAxes = new();
         private string[] wizQueue = Array.Empty<string>();
         private int wizStep = 0;
-        private Button skipBtn;
+        private Button skipBtn = new();
         private bool wasInGear = false;
+        private bool[] prevBtns = new bool[4096];
+        private List<string> pendingCmds = new();
+        private volatile bool running = true;
 
         public MainForm()
         {
-            Text = "TompanServeri SimRig Bridge v1.2 (FFB + Pedals + Shifters + Boxes + VAM/HF8)";
+            Text = "TompanServeri SimRig Bridge v1.3 (FFB + Pedals + Shifters + Boxes + VAM/HF8)";
             Size = new Size(640, 560);
-
             FormBorderStyle = FormBorderStyle.FixedSingle;
             MaximizeBox = false;
-            BackColor = Color.FromArgb(28, 28, 32);
+            BackColor = Color.FromArgb(24, 24, 28);
             ForeColor = Color.White;
 
-            if (File.Exists(cfgPath))
-                try { cfg = JsonSerializer.Deserialize<RigConfig>(File.ReadAllText(cfgPath)) ?? new(); } catch { }
-
-            OpenAllDevices();
+            LoadCfg();
+            LoadDevices();
             BuildUI();
+            if (cfg.FfbDev != Guid.Empty) ConnectFFB(cfg.FfbDev);
             StartLoops();
+            FormClosing += (s, e) => { running = false; constEffect?.Stop(); };
         }
-        private void OpenAllDevices()
+
+        private void LoadCfg()
         {
-            foreach (var s in sticks.Values) try { s.Unacquire(); s.Dispose(); } catch { }
+            try { if (File.Exists(cfgPath)) cfg = JsonSerializer.Deserialize<RigConfig>(File.ReadAllText(cfgPath)) ?? new(); }
+            catch { cfg = new(); }
+        }
+
+        private void SaveCfg()
+        {
+            try { File.WriteAllText(cfgPath, JsonSerializer.Serialize(cfg, new JsonSerializerOptions { WriteIndented = true })); }
+            catch { }
+        }
+
+        private void LoadDevices()
+        {
+            foreach (var j in sticks.Values) { try { j.Unacquire(); j.Dispose(); } catch { } }
             sticks.Clear();
+            devList.Clear();
             foreach (var d in di.GetDevices(DeviceClass.GameControl, DeviceEnumerationFlags.AttachedOnly))
             {
                 try
                 {
                     var j = new Joystick(di, d.InstanceGuid);
-                    j.SetCooperativeLevel(this.Handle, CooperativeLevel.Background | CooperativeLevel.NonExclusive);
+                    j.Properties.BufferSize = 128;
                     j.Acquire();
                     sticks[d.InstanceGuid] = j;
+                    devList.Add(d);
                 }
                 catch { }
             }
+            if (wheelBox.IsHandleCreated)
+            {
+                wheelBox.Items.Clear();
+                foreach (var d in devList) wheelBox.Items.Add(d.InstanceName);
+                int idx = devList.FindIndex(x => x.InstanceGuid == cfg.FfbDev);
+                if (idx >= 0) wheelBox.SelectedIndex = idx;
+                else if (wheelBox.Items.Count > 0) wheelBox.SelectedIndex = 0;
+            }
         }
-
-        private void SaveCfg() => File.WriteAllText(cfgPath, JsonSerializer.Serialize(cfg, new JsonSerializerOptions { WriteIndented = true }));
-
         private void BuildUI()
         {
             var tabs = new TabControl { Dock = DockStyle.Top, Height = 485 };
@@ -120,58 +138,57 @@ namespace SimRigBridge
             var t2 = new TabPage("2. Polkimet & Käsijarru") { BackColor = BackColor };
             var t3 = new TabPage("3. Vaihteet, Boxit & VAM/HF8") { BackColor = BackColor };
 
-            ffbCombo = new ComboBox { Location = new Point(15, 20), Width = 360, DropDownStyle = ComboBoxStyle.DropDownList };
-            foreach (var kv in sticks) ffbCombo.Items.Add(new DevItem { Name = kv.Value.Information.InstanceName, Guid = kv.Key });
-            if (ffbCombo.Items.Count > 0) ffbCombo.SelectedIndex = 0;
+            var l1 = new Label { Text = "Valitse FFB-ratti:", Location = new Point(15, 15), AutoSize = true };
+            wheelBox = new ComboBox { Location = new Point(15, 38), Width = 235, DropDownStyle = ComboBoxStyle.DropDownList };
+            foreach (var d in devList) wheelBox.Items.Add(d.InstanceName);
+            int idx = devList.FindIndex(x => x.InstanceGuid == cfg.FfbDev);
+            if (idx >= 0) wheelBox.SelectedIndex = idx;
+            else if (wheelBox.Items.Count > 0) wheelBox.SelectedIndex = 0;
 
-            var connBtn = new Button { Text = "Yhdistä FFB", Location = new Point(385, 19), Width = 115, BackColor = Color.FromArgb(0, 120, 215), FlatStyle = FlatStyle.Flat };
-            connBtn.Click += (s, e) => ConnectFFB();
+            var connBtn = new Button { Text = "Yhdistä FFB", Location = new Point(258, 37), Width = 95, Height = 27, BackColor = Color.FromArgb(0, 120, 215), FlatStyle = FlatStyle.Flat };
+            connBtn.Click += (s, e) => { if (wheelBox.SelectedIndex >= 0) ConnectFFB(devList[wheelBox.SelectedIndex].InstanceGuid); };
 
-            invFfbChk = new CheckBox { Text = "Käännä FFB-suunta (Invert)", Location = new Point(15, 55), Checked = cfg.InvFfb, AutoSize = true };
+            var testBtn = new Button { Text = "Testaa FFB", Location = new Point(360, 37), Width = 95, Height = 27, BackColor = Color.FromArgb(60, 60, 70), FlatStyle = FlatStyle.Flat };
+            testBtn.Click += (s, e) => TestFFB();
+
+            var refBtn = new Button { Text = "Päivitä laitteet", Location = new Point(462, 37), Width = 135, Height = 27, BackColor = Color.FromArgb(55, 85, 65), FlatStyle = FlatStyle.Flat };
+            refBtn.Click += (s, e) => { LoadDevices(); statusLbl.Text = "USB-laitteet päivitetty (" + sticks.Count + " kpl)"; };
+
+            gainSld = AddSlider(t1, "Kokonaisvoima (Gain %):", 85, cfg.Gain, v => { cfg.Gain = v; SaveCfg(); });
+            centerSld = AddSlider(t1, "Keskitys / Drift-palautus (%):", 155, cfg.Center, v => { cfg.Center = v; SaveCfg(); });
+            roadSld = AddSlider(t1, "Tienpinta / Töyssyt (%):", 225, cfg.Road, v => { cfg.Road = v; SaveCfg(); });
+
+            invFfbChk = new CheckBox { Text = "Käännä FFB-suunta (Invert Force)", Location = new Point(15, 300), Checked = cfg.InvFfb, AutoSize = true };
             invFfbChk.CheckedChanged += (s, e) => { cfg.InvFfb = invFfbChk.Checked; SaveCfg(); };
-
-            var gLbl = new Label { Text = $"Gain: {cfg.Gain}%", Location = new Point(15, 90), AutoSize = true };
-            gainSld = new TrackBar { Location = new Point(15, 110), Width = 480, Maximum = 100, Value = cfg.Gain };
-            gainSld.ValueChanged += (s, e) => { cfg.Gain = gainSld.Value; gLbl.Text = $"Gain: {cfg.Gain}%"; SaveCfg(); };
-
-            var cLbl = new Label { Text = $"Keskitys / Drift: {cfg.Center}%", Location = new Point(15, 165), AutoSize = true };
-            centSld = new TrackBar { Location = new Point(15, 185), Width = 480, Maximum = 100, Value = cfg.Center };
-            centSld.ValueChanged += (s, e) => { cfg.Center = centSld.Value; cLbl.Text = $"Keskitys / Drift: {cfg.Center}%"; SaveCfg(); };
-
-            var rLbl = new Label { Text = $"Tienpinta / Töyssyt: {cfg.Road}%", Location = new Point(15, 240), AutoSize = true };
-            roadSld = new TrackBar { Location = new Point(15, 260), Width = 480, Maximum = 100, Value = cfg.Road };
-            roadSld.ValueChanged += (s, e) => { cfg.Road = roadSld.Value; rLbl.Text = $"Tienpinta / Töyssyt: {cfg.Road}%"; SaveCfg(); };
-
-            t1.Controls.AddRange(new Control[] { ffbCombo, connBtn, invFfbChk, gLbl, gainSld, cLbl, centSld, rLbl, roadSld });
+            t1.Controls.AddRange(new Control[] { l1, wheelBox, connBtn, testBtn, refBtn, invFfbChk });
 
             bindStatusLbl = new Label { Text = "Klikkaa nappia ja liikuta haluttua poljinta / rattia / käsijarrua:", Location = new Point(15, 15), AutoSize = true, ForeColor = Color.SkyBlue };
             t2.Controls.Add(bindStatusLbl);
 
             string[] names = { "Ohjaus (Steer)", "Kaasu (Throttle)", "Jarru (Brake)", "Kytkin (Clutch)", "Käsijarru (Handbrake)" };
             string[] keys = { "steer", "throt", "brake", "clutch", "hb" };
-                      for (int i = 0; i < names.Length; i++)
+            for (int i = 0; i < names.Length; i++)
             {
-                int idx = i;
+                int i2 = i;
                 string k = keys[i];
                 int y = 45 + i * 82;
                 var b = new Button { Text = $"Tunnista: {names[i]}", Location = new Point(15, y), Width = 190, Height = 28, BackColor = Color.FromArgb(55, 55, 65), FlatStyle = FlatStyle.Flat };
                 b.Click += (s, e) => StartAxisListen(k);
                 var invB = new Button { Text = "Käännä", Location = new Point(212, y), Width = 75, Height = 28, BackColor = Color.FromArgb(45, 45, 50), FlatStyle = FlatStyle.Flat };
                 invB.Click += (s, e) => ToggleInvert(k);
-                axisBars[idx] = new ProgressBar { Location = new Point(295, y + 2), Width = 310, Height = 24, Maximum = 100 };
+                axisBars[i2] = new ProgressBar { Location = new Point(295, y + 2), Width = 310, Height = 24, Maximum = 100 };
 
                 var ab = GetBind(k);
-                minLbls[idx] = new Label { Text = $"Min: {ab?.Min ?? 0}%", Location = new Point(15, y + 34), Width = 75, AutoSize = false };
-                minSlds[idx] = new TrackBar { Location = new Point(90, y + 30), Width = 195, Maximum = 95, TickStyle = TickStyle.None, Value = ab?.Min ?? 0 };
-                minSlds[idx].ValueChanged += (s, e) => { var x = GetBind(k); if (x != null) { x.Min = minSlds[idx].Value; minLbls[idx].Text = $"Min: {x.Min}%"; SaveCfg(); } };
+                minLbls[i2] = new Label { Text = $"Min: {ab?.Min ?? 0}%", Location = new Point(15, y + 34), Width = 75, AutoSize = false };
+                minSlds[i2] = new TrackBar { Location = new Point(90, y + 30), Width = 195, Maximum = 95, TickStyle = TickStyle.None, Value = ab?.Min ?? 0 };
+                minSlds[i2].ValueChanged += (s, e) => { var x = GetBind(k); if (x != null) { x.Min = minSlds[i2].Value; minLbls[i2].Text = $"Min: {x.Min}%"; SaveCfg(); } };
 
-                maxLbls[idx] = new Label { Text = $"Max: {ab?.Max ?? 100}%", Location = new Point(295, y + 34), Width = 80, AutoSize = false };
-                maxSlds[idx] = new TrackBar { Location = new Point(375, y + 30), Width = 230, Minimum = 5, Maximum = 100, TickStyle = TickStyle.None, Value = ab?.Max ?? 100 };
-                maxSlds[idx].ValueChanged += (s, e) => { var x = GetBind(k); if (x != null) { x.Max = maxSlds[idx].Value; maxLbls[idx].Text = $"Max: {x.Max}%"; SaveCfg(); } };
+                maxLbls[i2] = new Label { Text = $"Max: {ab?.Max ?? 100}%", Location = new Point(295, y + 34), Width = 80, AutoSize = false };
+                maxSlds[i2] = new TrackBar { Location = new Point(375, y + 30), Width = 230, Minimum = 5, Maximum = 100, TickStyle = TickStyle.None, Value = ab?.Max ?? 100 };
+                maxSlds[i2].ValueChanged += (s, e) => { var x = GetBind(k); if (x != null) { x.Max = maxSlds[i2].Value; maxLbls[i2].Text = $"Max: {x.Max}%"; SaveCfg(); } };
 
-                t2.Controls.AddRange(new Control[] { b, invB, axisBars[idx], minLbls[idx], minSlds[idx], maxLbls[idx], maxSlds[idx] });
+                t2.Controls.AddRange(new Control[] { b, invB, axisBars[i2], minLbls[i2], minSlds[i2], maxLbls[i2], maxSlds[i2] });
             }
-
 
             udpChk = new CheckBox { Text = "Haptiikka UDP (SimHub / Simsonn VAM / NLR HF8 - portti 20777)", Location = new Point(15, 15), Checked = cfg.UdpOn, AutoSize = true, ForeColor = Color.LightGreen };
             udpChk.CheckedChanged += (s, e) => { cfg.UdpOn = udpChk.Checked; SaveCfg(); };
@@ -179,13 +196,13 @@ namespace SimRigBridge
             var cmdLbl = new Label { Text = "Komento (esim. suomiradio_next, sk_flip, gear_up, gear_down):", Location = new Point(15, 50), AutoSize = true };
             cmdBox = new TextBox { Location = new Point(15, 72), Width = 260, Text = "suomiradio_next" };
             var addBtn = new Button { Text = "Paina nappia / Vaihdetta", Location = new Point(285, 70), Width = 190, Height = 26, BackColor = Color.FromArgb(0, 120, 215), FlatStyle = FlatStyle.Flat };
-            addBtn.Click += (s, e) => { listenTarget = "btn"; statusLbl.Text = "Paina nyt haluttua nappia Boxissa tai vaihdekepissä..."; };
+            addBtn.Click += (s, e) => { ClearPrevBtns(); listenTarget = "btn"; statusLbl.Text = "Paina nyt haluttua nappia Boxissa tai vaihdekepissä..."; };
 
-            btnList = new ListBox { Location = new Point(15, 110), Width = 480, Height = 190 };
+            btnList = new ListBox { Location = new Point(15, 110), Width = 580, Height = 190 };
             RefreshBtnList();
 
-            var delBtn = new Button { Text = "Poista valittu", Location = new Point(15, 308), Width = 120, BackColor = Color.DarkRed, FlatStyle = FlatStyle.Flat };
-                        delBtn.Click += (s, e) => { if (btnList.SelectedIndex >= 0) { cfg.Btns.RemoveAt(btnList.SelectedIndex); SaveCfg(); RefreshBtnList(); } };
+            var delBtn = new Button { Text = "Poista valittu", Location = new Point(15, 315), Width = 115, Height = 28, BackColor = Color.DarkRed, FlatStyle = FlatStyle.Flat };
+            delBtn.Click += (s, e) => { if (btnList.SelectedIndex >= 0) { cfg.Btns.RemoveAt(btnList.SelectedIndex); SaveCfg(); RefreshBtnList(); } };
 
             var hWizBtn = new Button { Text = "Velho: H-kaavio (R, 1–6)", Location = new Point(140, 315), Width = 165, Height = 28, BackColor = Color.FromArgb(0, 130, 90), FlatStyle = FlatStyle.Flat };
             hWizBtn.Click += (s, e) => StartWizard(new[] { "gear_r", "gear_1", "gear_2", "gear_3", "gear_4", "gear_5", "gear_6" });
@@ -197,16 +214,31 @@ namespace SimRigBridge
             skipBtn.Click += (s, e) => NextWizardStep();
 
             t3.Controls.AddRange(new Control[] { udpChk, cmdLbl, cmdBox, addBtn, btnList, delBtn, hWizBtn, sqWizBtn, skipBtn });
-                    tabs.TabPages.AddRange(new[] { t1, t2, t3 });
-
+            tabs.TabPages.AddRange(new[] { t1, t2, t3 });
 
             statusLbl = new Label { Text = "Valmis. Kytkettyjä USB-ohjaimia: " + sticks.Count, Dock = DockStyle.Bottom, Height = 30, TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(15, 0, 0, 0), ForeColor = Color.LightGreen };
             Controls.AddRange(new Control[] { tabs, statusLbl });
         }
+        private TrackBar AddSlider(TabPage p, string title, int y, int val, Action<int> onChange)
+        {
+            var l = new Label { Text = $"{title} {val}%", Location = new Point(15, y), AutoSize = true };
+            var tb = new TrackBar { Location = new Point(15, y + 20), Width = 580, Minimum = 0, Maximum = 150, Value = Math.Clamp(val, 0, 150), TickFrequency = 10 };
+            tb.ValueChanged += (s, e) => { l.Text = $"{title} {tb.Value}%"; onChange(tb.Value); };
+            p.Controls.AddRange(new Control[] { l, tb });
+            return tb;
+        }
+
+        private void ClearPrevBtns() => Array.Clear(prevBtns, 0, prevBtns.Length);
+
         private void RefreshBtnList()
         {
             btnList.Items.Clear();
-            foreach (var b in cfg.Btns) btnList.Items.Add($"Nappi {b.Btn + 1} -> /{b.Cmd}");
+            foreach (var b in cfg.Btns)
+            {
+                string devName = devList.FirstOrDefault(d => d.InstanceGuid == b.Dev)?.InstanceName ?? "USB";
+                string bLabel = b.Btn >= 1000 ? $"POV {(b.Btn - 1000) / 4500}" : $"Nappi {b.Btn + 1}";
+                btnList.Items.Add($"[{devName}] {bLabel} -> /{b.Cmd}");
+            }
         }
 
         private void StartAxisListen(string key)
@@ -217,16 +249,18 @@ namespace SimRigBridge
             bindStatusLbl.Text = $"Liikuta nyt: {key.ToUpper()}...";
         }
 
-                private AxisBind? GetBind(string k) => k switch { "steer" => cfg.Steer, "throt" => cfg.Throt, "brake" => cfg.Brake, "clutch" => cfg.Clutch, "hb" => cfg.Hb, _ => null };
+        private AxisBind? GetBind(string k) => k switch { "steer" => cfg.Steer, "throt" => cfg.Throt, "brake" => cfg.Brake, "clutch" => cfg.Clutch, "hb" => cfg.Hb, _ => null };
 
         private void StartWizard(string[] steps)
         {
+            ClearPrevBtns();
             wizQueue = steps; wizStep = 0; listenTarget = "wiz"; skipBtn.Visible = true;
             statusLbl.Text = $"Velho (1/{wizQueue.Length}): Laita päälle -> {wizQueue.First()}";
         }
 
         private void NextWizardStep()
         {
+            ClearPrevBtns();
             wizStep++;
             if (wizStep >= wizQueue.Length) { listenTarget = ""; skipBtn.Visible = false; statusLbl.Text = "Vaihteiden tunnistus valmis!"; }
             else statusLbl.Text = $"Velho ({wizStep + 1}/{wizQueue.Length}): Laita päälle -> {wizQueue.ElementAt(wizStep)}";
@@ -250,47 +284,91 @@ namespace SimRigBridge
             return Math.Clamp((norm - minF) / (maxF - minF), 0f, 1f);
         }
 
-
-        private void ConnectFFB()
+        private void ConnectFFB(Guid guid)
         {
-            if (ffbCombo.SelectedItem is not DevItem item) return;
             try
             {
-                ffbEffect?.Dispose(); ffbWheel?.Unacquire(); ffbWheel?.Dispose();
-                ffbWheel = new Joystick(di, item.Guid);
-                ffbWheel.SetCooperativeLevel(this.Handle, CooperativeLevel.Background | CooperativeLevel.Exclusive);
+                constEffect?.Stop();
+                ffbWheel?.Unacquire();
+                ffbWheel = new Joystick(di, guid);
+                ffbWheel.SetCooperativeLevel(Handle, CooperativeLevel.Background | CooperativeLevel.Exclusive);
                 ffbWheel.Acquire();
-                if ((ffbWheel.Capabilities.Flags & DeviceFlags.ForceFeedback) == 0) { statusLbl.Text = "Valittu laite ei tue FFB:tä."; return; }
-                try { ffbWheel.Properties.AutoCenter = false; } catch { }
-                var axis = ffbWheel.GetObjects(DeviceObjectTypeFlags.Axis).FirstOrDefault(o => (o.ObjectId.Flags & DeviceObjectTypeFlags.ForceFeedbackActuator) != 0);
-                int id = axis != null ? (int)axis.ObjectId : 0;
-                ffbEffect = new Effect(ffbWheel, EffectGuid.ConstantForce, new EffectParameters
+                var effParams = new EffectParameters
                 {
-                    Flags = EffectFlags.Cartesian | EffectFlags.ObjectIds, Duration = int.MaxValue, Gain = 10000, TriggerButton = -1,
-                    Axes = new[] { id }, Directions = new[] { 0 }, Parameters = new ConstantForce { Magnitude = 0 }
-                });
-                ffbEffect.Start(1, EffectPlayFlags.None);
-                statusLbl.Text = $"FFB yhdistetty: {item.Name}";
+                    Duration = int.MaxValue,
+                    Flags = EffectFlags.Cartesian | EffectFlags.ObjectIds,
+                    Gain = 10000,
+                    SamplePeriod = 0,
+                    TriggerButton = -1,
+                    TriggerRepeatInterval = 0,
+                    Axes = new[] { 0 },
+                    Directions = new[] { 0 },
+                    Parameters = new ConstantForce { Magnitude = 0 }
+                };
+                constEffect = new Effect(ffbWheel, EffectGuid.ConstantForce, effParams);
+                constEffect.Start(1);
+                cfg.FfbDev = guid;
+                SaveCfg();
+                statusLbl.Text = "FFB yhdistetty: " + ffbWheel.Information.InstanceName;
             }
-            catch (Exception ex) { MessageBox.Show(ex.Message); }
+            catch (Exception ex) { statusLbl.Text = "FFB-virhe: " + ex.Message; }
+        }
+
+        private void TestFFB()
+        {
+            if (constEffect == null) return;
+            new Thread(() => {
+                SetForce(4500); Thread.Sleep(250);
+                SetForce(-4500); Thread.Sleep(250);
+                SetForce(0);
+            }).Start();
+        }
+
+        private void SetForce(int mag)
+        {
+            if (constEffect == null) return;
+            try
+            {
+                int val = Math.Clamp(cfg.InvFfb ? -mag : mag, -10000, 10000);
+                constEffect.SetParameters(new EffectParameters { Parameters = new ConstantForce { Magnitude = val } }, EffectParameterFlags.TypeSpecificParameters);
+            }
+            catch { }
+        }
+        private void HandleBtnPress(Guid dev, int code)
+        {
+            if (listenTarget == "wiz")
+            {
+                string cmd = wizQueue.ElementAt(wizStep);
+                Invoke(() => { cfg.Btns.RemoveAll(x => x.Cmd == cmd); cfg.Btns.Add(new BtnBind { Dev = dev, Btn = code, Cmd = cmd }); SaveCfg(); RefreshBtnList(); NextWizardStep(); });
+            }
+            else if (listenTarget == "btn")
+            {
+                listenTarget = "";
+                Invoke(() => { cfg.Btns.Add(new BtnBind { Dev = dev, Btn = code, Cmd = cmdBox.Text }); SaveCfg(); RefreshBtnList(); statusLbl.Text = $"Sidottu -> /{cmdBox.Text}"; });
+            }
+            else
+            {
+                var match = cfg.Btns.FirstOrDefault(x => x.Dev == dev && x.Btn == code);
+                if (match != null) lock (pendingCmds) pendingCmds.Add(match.Cmd);
+            }
         }
 
         private void StartLoops()
         {
-            new Thread(() =>
-            {
+            new Thread(() => {
                 while (running)
                 {
                     try
                     {
                         foreach (var kv in sticks)
                         {
+                            kv.Value.Poll();
                             var st = kv.Value.GetCurrentState();
-                            var ax = GetAxes(st);
-                            if (listenTarget != "" && listenTarget != "btn" && baseAxes.TryGetValue(kv.Key, out var bAx))
+                            var cur = GetAxes(st);
+                            if (listenTarget != "" && listenTarget != "btn" && listenTarget != "wiz" && baseAxes.TryGetValue(kv.Key, out var bAx))
                             {
-                                for (int i = 0; i < ax.Length; i++)
-                                    if (Math.Abs(ax[i] - bAx[i]) > 15000)
+                                for (int i = 0; i < cur.Length; i++)
+                                    if (Math.Abs(cur[i] - bAx[i]) > 18000)
                                     {
                                         var bind = new AxisBind { Dev = kv.Key, Axis = i };
                                         if (listenTarget == "steer") cfg.Steer = bind;
@@ -303,35 +381,23 @@ namespace SimRigBridge
                                         break;
                                     }
                             }
-                                                       for (int b = 0; b < st.Buttons.Length; b++)
+                            for (int b = 0; b < st.Buttons.Length; b++)
                             {
-                                int idx = Math.Abs((kv.Key.GetHashCode() + b) % 512);
-                                if (st.Buttons[b] && !prevBtns[idx])
-                                {
-                                    if (listenTarget == "wiz")
-                                    {
-                                        string cmd = wizQueue.ElementAt(wizStep);
-                                        Invoke(() => { cfg.Btns.RemoveAll(x => x.Cmd == cmd); cfg.Btns.Add(new BtnBind { Dev = kv.Key, Btn = b, Cmd = cmd }); SaveCfg(); RefreshBtnList(); NextWizardStep(); });
-                                    }
-                                    else if (listenTarget == "btn")
-                                    {
-                                        listenTarget = "";
-                                        Invoke(() => { cfg.Btns.Add(new BtnBind { Dev = kv.Key, Btn = b, Cmd = cmdBox.Text }); SaveCfg(); RefreshBtnList(); statusLbl.Text = $"Nappi {b + 1} sidottu!"; });
-                                    }
-                                    else
-                                    {
-                                        var match = cfg.Btns.FirstOrDefault(x => x.Dev == kv.Key && x.Btn == b);
-                                        if (match != null) lock (pendingCmds) pendingCmds.Add(match.Cmd);
-                                    }
-                                }
+                                int idx = Math.Abs((kv.Key.GetHashCode() * 31 + b) % 4000);
+                                if (st.Buttons[b] && !prevBtns[idx]) HandleBtnPress(kv.Key, b);
                                 prevBtns[idx] = st.Buttons[b];
                             }
+                            int pov = st.PointOfViewControllers.ElementAtOrDefault(0);
+                            int povIdx = Math.Abs((kv.Key.GetHashCode() * 31 + 999) % 4000);
+                            bool povDown = pov >= 0;
+                            if (povDown && !prevBtns[povIdx]) HandleBtnPress(kv.Key, 1000 + pov);
+                            prevBtns[povIdx] = povDown;
                         }
 
                         var hGears = cfg.Btns.Where(x => x.Cmd == "gear_r" || (x.Cmd.StartsWith("gear_") && x.Cmd.Length == 6 && char.IsDigit(x.Cmd.Last()))).ToList();
                         if (hGears.Count > 0)
                         {
-                            bool anyHeld = hGears.Any(g => sticks.TryGetValue(g.Dev, out var j) && g.Btn < j.GetCurrentState().Buttons.Length && j.GetCurrentState().Buttons.ElementAt(g.Btn));
+                            bool anyHeld = hGears.Any(g => sticks.TryGetValue(g.Dev, out var j) && ((g.Btn < 1000 && g.Btn < j.GetCurrentState().Buttons.Length && j.GetCurrentState().Buttons.ElementAt(g.Btn)) || (g.Btn >= 1000 && j.GetCurrentState().PointOfViewControllers.ElementAtOrDefault(0) == (g.Btn - 1000))));
                             if (anyHeld) wasInGear = true;
                             else if (wasInGear) { wasInGear = false; lock (pendingCmds) pendingCmds.Add("gear_n"); }
                         }
@@ -344,75 +410,66 @@ namespace SimRigBridge
                     }
                     catch { }
                     Thread.Sleep(10);
-
                 }
             }) { IsBackground = true }.Start();
 
-            try
-            {
-                http = new HttpListener();
-                http.Prefixes.Add("http://127.0.0" + ".1:8765/");
-                http.Start();
-            }
-            catch (Exception ex)
-            {
-                statusLbl.Text = "HTTP-virhe: " + ex.Message;
-            }
-
-            new Thread(() =>
-            {
-                while (running)
+            new Thread(() => {
+                try
                 {
-                    try
+                    var http = new HttpListener();
+                    http.Prefixes.Add("http://127.0.0");
+                    http.Start();
+                    using var udp = new UdpClient();
+                    while (running)
                     {
                         var ctx = http.GetContext();
                         ctx.Response.AddHeader("Access-Control-Allow-Origin", "*");
-                        using var r = new StreamReader(ctx.Request.InputStream, Encoding.UTF8);
-                        var d = JsonSerializer.Deserialize<TelemetryData>(r.ReadToEnd());
+                        ctx.Response.AddHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
+                        ctx.Response.AddHeader("Access-Control-Allow-Headers", "Content-Type");
+                        if (ctx.Request.HttpMethod == "OPTIONS") { ctx.Response.StatusCode = 200; ctx.Response.Close(); continue; }
 
-                        if (d != null && d.active && !d.inAir && ffbEffect != null)
+                        using var r = new StreamReader(ctx.Request.InputStream);
+                        string body = r.ReadToEnd();
+                        var d = string.IsNullOrWhiteSpace(body) ? new TelemetryData() : (JsonSerializer.Deserialize<TelemetryData>(body) ?? new());
+
+                        if (d.active && !d.inAir)
                         {
                             float g = cfg.Gain / 100f, cf = (cfg.Center / 100f) * 3500f, rf = (cfg.Road / 100f) * 2000f;
                             float sf = Math.Clamp(d.speed / 25f, 0.1f, 1.5f);
                             int mag = (int)(((-d.steer * sf * cf) + (d.lateral * cf * 0.45f) + (d.bump * rf)) * g);
-                            if (cfg.InvFfb) mag = -mag;
-                            mag = Math.Clamp(mag, -10000, 10000);
-                            ffbEffect.SetParameters(new EffectParameters { Flags = EffectFlags.Cartesian | EffectFlags.ObjectIds, Parameters = new ConstantForce { Magnitude = mag } }, EffectParameterFlags.TypeSpecificParameters | EffectParameterFlags.NoRestart);
+                            SetForce(mag);
                         }
+                        else SetForce(0);
 
-                        if (d != null && d.active && cfg.UdpOn)
+                        if (cfg.UdpOn && d.active)
                         {
-                            byte[] pkt = new byte[324];
-                            BitConverter.GetBytes(1).CopyTo(pkt, 0);
-                            BitConverter.GetBytes(8500f).CopyTo(pkt, 8);
-                            BitConverter.GetBytes(d.rpm * 8500f).CopyTo(pkt, 16);
-                            BitConverter.GetBytes(d.speed).CopyTo(pkt, 244);
-                            BitConverter.GetBytes(d.skid).CopyTo(pkt, 164);
-                            pkt[307] = (byte)Math.Clamp(d.gear, 0, 10);
+                            byte[] pkt = Encoding.UTF8.GetBytes(body);
                             udp.Send(pkt, pkt.Length, "127.0.0.1", cfg.UdpPort);
                         }
 
                         string[] cmds;
                         lock (pendingCmds) { cmds = pendingCmds.ToArray(); pendingCmds.Clear(); }
-                        bool hasAxes = cfg.Steer != null || cfg.Throt != null || cfg.Brake != null;
-                        string resp = JsonSerializer.Serialize(new { active = hasAxes, steer = ReadAxis(cfg.Steer, true), throt = ReadAxis(cfg.Throt, false), brake = ReadAxis(cfg.Brake, false), clutch = ReadAxis(cfg.Clutch, false), hb = ReadAxis(cfg.Hb, false), cmds });
-                        byte[] buf = Encoding.UTF8.GetBytes(resp);
+
+                        var respObj = new { active = true, steer = ReadAxis(cfg.Steer, true), throt = ReadAxis(cfg.Throt, false), brake = ReadAxis(cfg.Brake, false), clutch = ReadAxis(cfg.Clutch, false), hb = ReadAxis(cfg.Hb, false), cmds };
+                        byte[] outBuf = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(respObj));
                         ctx.Response.ContentType = "application/json";
-                        ctx.Response.OutputStream.Write(buf, 0, buf.Length);
+                        ctx.Response.OutputStream.Write(outBuf, 0, outBuf.Length);
                         ctx.Response.Close();
                     }
-                    catch { }
+                }
+                catch (Exception ex)
+                {
+                    if (IsHandleCreated) BeginInvoke(() => statusLbl.Text = "HTTP-virhe: " + ex.Message);
                 }
             }) { IsBackground = true }.Start();
         }
 
-        protected override void OnFormClosing(FormClosingEventArgs e)
+        [STAThread]
+        static void Main()
         {
-            running = false; http?.Stop(); ffbEffect?.Dispose(); ffbWheel?.Unacquire(); ffbWheel?.Dispose();
-            base.OnFormClosing(e);
+            Application.EnableVisualStyles();
+            Application.SetCompatibleTextRenderingDefault(false);
+            Application.Run(new MainForm());
         }
-
-        private class DevItem { public string Name { get; set; } public Guid Guid { get; set; } public override string ToString() => Name; }
-        [STAThread] static void Main() { Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false); try { Application.Run(new MainForm()); } catch (Exception ex) { MessageBox.Show(ex.ToString(), "Virhe"); } }
     }
 }
