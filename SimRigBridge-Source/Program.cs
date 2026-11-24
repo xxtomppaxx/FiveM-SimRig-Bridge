@@ -435,7 +435,7 @@ namespace SimRigBridge
                 try
                 {
                     var http = new HttpListener();
-                    http.Prefixes.Add("http://127.0.0:8765/");
+                    http.Prefixes.Add("http://127.0.0.1:8765/");
                     http.Start();
                     using var udp = new UdpClient();
                     while (running)
