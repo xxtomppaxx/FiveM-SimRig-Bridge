@@ -67,6 +67,7 @@ namespace SimRigBridge
         private readonly string cfgPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "rig_config.json");
         private RigConfig cfg = new();
         private DirectInput di = new();
+        private Dictionary<Guid, Joystick> sticks = new();
        private bool[] prevBtns = new bool[4000];
         private Joystick? ffbWheel;
         private Effect? constEffect;
