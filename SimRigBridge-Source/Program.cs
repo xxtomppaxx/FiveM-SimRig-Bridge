@@ -467,6 +467,8 @@ namespace SimRigBridge
                                     var wsCtx = await ctx.AcceptWebSocketAsync(null);
                                     var ws = wsCtx.WebSocket;
                                     var buf = new byte[N4096];
+                                    float prevSteer = 0f;
+
                                     while (ws.State == WebSocketState.Open && running)
                                     {
                                         var res = await ws.ReceiveAsync(new ArraySegment<byte>(buf), CancellationToken.None);
@@ -475,12 +477,28 @@ namespace SimRigBridge
                                         var d = string.IsNullOrWhiteSpace(body) ? new TelemetryData() : (JsonSerializer.Deserialize<TelemetryData>(body) ?? new());
                                         if (d.active && !d.inAir)
                                         {
-                                            float g = cfg.Gain / 100f, cf = (cfg.Center / 100f) * 3500f, rf = (cfg.Road / 100f) * 2000f;
-                                            float sf = Math.Clamp(d.speed / 25f, 0.1f, 1.5f);
-                                            int mag = (int)(((-d.steer * sf * cf) + (d.lateral * cf * 0.45f) + (d.bump * rf)) * g);
-                                            SetForce(mag);
+                                                                                    float curSteer = ReadAxis(cfg.Steer, true);
+                                        float steerVel = curSteer - prevSteer;
+                                        prevSteer = curSteer;
+
+                                        if (d.active && !d.inAir)
+                                        {
+                                            float g = cfg.Gain / 100f;
+                                            float cf = (cfg.Center / 100f) * 6500f;
+                                            float rf = (cfg.Road / 100f) * 4500f;
+
+                                            float speedFactor = Math.Clamp(0.20f + (d.speed / 24f), 0.20f, 1.35f);
+                                            float alignForce = (-curSteer * speedFactor * cf) + (d.lateral * cf * 0.42f);
+                                            float damping = -steerVel * cf * 3.8f;
+
+                                            float skidVib = (d.skid > 1.2f) ? (float)Math.Sin(Environment.TickCount64 * 0.14) * Math.Min((d.skid - 1.2f) * 900f, 2200f) : 0f;
+                                            float rpmVib = (d.speed < 3f) ? (float)Math.Sin(Environment.TickCount64 * 0.08 * (0.5f + d.rpm)) * 180f : 0f;
+                                            float roadForce = (d.bump * rf) + skidVib + rpmVib;
+
+                                            SetForce((int)((alignForce + damping + roadForce) * g));
                                         }
                                         else SetForce(0);
+
 
                                         if (cfg.UdpOn && d.active)
                                         {
