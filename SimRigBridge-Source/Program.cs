@@ -67,7 +67,7 @@ namespace SimRigBridge
         private readonly string cfgPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "rig_config.json");
         private RigConfig cfg = new();
         private DirectInput di = new();
-        private Dictionary<Guid, Joystick> sticks = new();
+       private bool[] prevBtns = new bool[4000];
         private Joystick? ffbWheel;
         private Effect? constEffect;
         private volatile int targetForce = 0;
@@ -307,7 +307,7 @@ namespace SimRigBridge
                     Envelope = null,
                     Parameters = new ConstantForce { Magnitude = 0 }
                 };
-                constEffect = new Effect(ffbWheel, fx.Guid, ep);
+                constEffect = new Effect(ffbWheel, fx[0].Guid, ep);
                 constEffect.Start(1, EffectPlayFlags.None);
                 statusLbl.Text = "FFB yhdistetty: " + ffbWheel.Information.InstanceName;
             }
@@ -333,7 +333,7 @@ namespace SimRigBridge
             }
         }
 
-        private int[] GetAxes(JoystickState s) => new[] { s.X, s.Y, s.Z, s.RotationX, s.RotationY, s.RotationZ, s.Sliders, s.Sliders };
+       private int[] GetAxes(JoystickState s) => new[] { s.X, s.Y, s.Z, s.RotationX, s.RotationY, s.RotationZ, s.Sliders[0], s.Sliders[1] };
 
         private float ReadAxis(AxisBind b, bool centered)
         {
