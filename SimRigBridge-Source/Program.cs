@@ -300,7 +300,7 @@ namespace SimRigBridge
                 ffbWheel.Acquire();
 
                 var ffbObjs = ffbWheel.GetObjects(DeviceObjectTypeFlags.ForceFeedbackActuator);
-                int axisId = ffbObjs.Count > 0 ? ffbObjs.First().ObjectId : 0;
+                int axisId = ffbObjs.Count > 0 ? (int)ffbObjs.First().ObjectId : 0;
 
                 var effParams = new EffectParameters
                 {
