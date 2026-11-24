@@ -475,9 +475,12 @@ namespace SimRigBridge
                                             float cf = (cfg.Center / 100f) * 6500f;
                                             float rf = (cfg.Road / 100f) * 4500f;
 
-                                            float speedFactor = Math.Clamp(0.20f + (d.speed / 24f), 0.20f, 1.35f);
-                                            float alignForce = (-curSteer * speedFactor * cf) + (d.lateral * cf * 0.42f);
-                                            float damping = -steerVel * cf * 3.8f;
+                                            float speedFactor = Math.Clamp(0.55f + (d.speed / 18f), 0.55f, 1.50f);
+float curvedSteer = Math.Sign(curSteer) * (float)Math.Pow(Math.Abs(curSteer), 0.35);
+float minHold = (Math.Abs(curSteer) > 0.004f) ? (-Math.Sign(curSteer) * cf * 0.22f) : 0f;
+float alignForce = (-curvedSteer * speedFactor * cf * 1.10f) + minHold - (d.lateral * cf * 0.35f);
+float damping = -steerVel * cf * 5.5f;
+
 
                                             float skidVib = (d.skid > 1.2f) ? (float)Math.Sin(Environment.TickCount64 * 0.14) * Math.Min((d.skid - 1.2f) * 900f, 2200f) : 0f;
                                             float rpmVib = (d.speed < 3f) ? (float)Math.Sin(Environment.TickCount64 * 0.08 * (0.5f + d.rpm)) * 180f : 0f;
