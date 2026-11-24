@@ -191,9 +191,21 @@ namespace SimRigBridge
             InitDevices();
             StartLoops();
 
-            var ffbTimer = new System.Windows.Forms.Timer { Interval = 30 };
-            ffbTimer.Tick += (_, _) => { if (running && constEffect != null) SetForce(targetForce); };
+                        var ffbTimer = new System.Windows.Forms.Timer { Interval = 30 };
+            ffbTimer.Tick += (_, _) =>
+            {
+                if (!running || constEffect == null) return;
+                if (Environment.TickCount64 - lastTelemetryTick > 200)
+                {
+                    targetForce = 0;
+                    smoothForce = 0f;
+                    try { constEffect.Stop(); } catch { }
+                    return;
+                }
+                SetForce(targetForce);
+            };
             ffbTimer.Start();
+
 
             FormClosing += (_, _) => { running = false; SetForce(0); constEffect?.Dispose(); ffbWheel?.Unacquire(); };
         }
@@ -313,7 +325,7 @@ namespace SimRigBridge
             }
             catch (Exception ex) { statusLbl.Text = "FFB-virhe: " + ex.Message; }
         }
-        private void SetForce(int mag)
+              private void SetForce(int mag)
         {
             if (constEffect == null || ffbWheel == null) return;
             smoothForce = (smoothForce * 0.45f) + (mag * 0.55f);
@@ -321,6 +333,8 @@ namespace SimRigBridge
             try
             {
                 constEffect.SetParameters(new EffectParameters { Parameters = new ConstantForce { Magnitude = val } }, EffectParameterFlags.TypeSpecificParameters);
+                if ((constEffect.Status & EffectStatus.Playing) == 0)
+                    constEffect.Start(1, EffectPlayFlags.None);
             }
             catch
             {
@@ -332,6 +346,7 @@ namespace SimRigBridge
                 catch { }
             }
         }
+
 
        private int[] GetAxes(JoystickState s) => new[] { s.X, s.Y, s.Z, s.RotationX, s.RotationY, s.RotationZ, s.Sliders[0], s.Sliders[1] };
 
@@ -469,32 +484,40 @@ namespace SimRigBridge
                                         float steerVel = curSteer - prevSteer;
                                         prevSteer = curSteer;
 
-                                        if (d.active && !d.inAir)
+                                                                                if (d.active && !d.inAir)
                                         {
+                                            lastTelemetryTick = Environment.TickCount64;
                                             float g = cfg.Gain / 100f;
-                                            float cf = (cfg.Center / 100f) * 6500f;
-                                            float rf = (cfg.Road / 100f) * 4500f;
+                                            float cf = (cfg.Center / 100f) * 7500f;
+                                            float rf = (cfg.Road / 100f) * 3500f;
 
-                                            float speedFactor = Math.Clamp(0.55f + (d.speed / 18f), 0.55f, 1.50f);
-float curvedSteer = Math.Sign(curSteer) * (float)Math.Pow(Math.Abs(curSteer), 0.35);
-float minHold = (Math.Abs(curSteer) > 0.004f) ? (-Math.Sign(curSteer) * cf * 0.22f) : 0f;
-float alignForce = (-curvedSteer * speedFactor * cf * 1.10f) + minHold - (d.lateral * cf * 0.35f);
-float damping = -steerVel * cf * 5.5f;
+                                            float safeLat = Math.Clamp(d.lateral, -2.0f, 2.0f);
+                                            float safeBump = Math.Clamp(d.bump, -1.0f, 1.0f);
 
+                                            float speedFactor = Math.Clamp(0.85f + (d.speed / 25f), 0.85f, 1.50f);
+                                            float linearCenter = (float)Math.Tanh(curSteer * 1.8f);
+                                            float alignForce = (-linearCenter * speedFactor * cf) - (safeLat * cf * 0.25f);
+                                            float damping = -steerVel * cf * 4.5f;
 
-                                            float skidVib = (d.skid > 1.2f) ? (float)Math.Sin(Environment.TickCount64 * 0.14) * Math.Min((d.skid - 1.2f) * 900f, 2200f) : 0f;
-                                            float rpmVib = (d.speed < 3f) ? (float)Math.Sin(Environment.TickCount64 * 0.08 * (0.5f + d.rpm)) * 180f : 0f;
-                                            float roadForce = (d.bump * rf) + skidVib + rpmVib;
+                                            float skidVib = (d.skid > 1.2f) ? (float)Math.Sin(Environment.TickCount64 * 0.14) * Math.Min((d.skid - 1.2f) * 700f, 1500f) : 0f;
+                                            float rpmVib = (d.speed < 3f) ? (float)Math.Sin(Environment.TickCount64 * 0.08 * (0.5f + d.rpm)) * 120f : 0f;
+                                            float roadForce = (safeBump * rf) + skidVib + rpmVib;
 
                                             targetForce = (int)((alignForce + damping + roadForce) * g);
                                         }
-                                        else targetForce = 0;
+                                        else
+                                        {
+                                            lastTelemetryTick = 0;
+                                            targetForce = 0;
+                                            smoothForce = 0f;
+                                        }
 
                                         if (cfg.UdpOn && d.active)
                                         {
                                             byte[] pkt = Encoding.UTF8.GetBytes(body);
                                             udp.Send(pkt, pkt.Length, "127.0.0.1", cfg.UdpPort);
                                         }
+
 
                                         string[] cmds;
                                         lock (pendingCmds) { cmds = pendingCmds.ToArray(); pendingCmds.Clear(); }
