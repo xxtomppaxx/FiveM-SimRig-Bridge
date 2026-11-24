@@ -62,7 +62,11 @@ namespace SimRigBridge
         private CheckBox invFfbChk = new(), udpChk = new();
         private ListBox btnList = new();
         private TextBox cmdBox = new();
-        private ProgressBar[] axisBars = new ProgressBar[5];
+        private Panel[] axisBars = new Panel[5];
+        private int[] axisVals = new int[5];
+        private long lastUiTick = 0;
+
+
         private TrackBar[] minSlds = new TrackBar[5], maxSlds = new TrackBar[5];
         private Label[] minLbls = new Label[5], maxLbls = new Label[5];
 
@@ -408,14 +412,21 @@ namespace SimRigBridge
                             else if (wasInGear) { wasInGear = false; lock (pendingCmds) pendingCmds.Add("gear_n"); }
                         }
 
-                        if (IsHandleCreated)
+                                             long now = Environment.TickCount64;
+                        if (IsHandleCreated && Visible && now - lastUiTick >= 16)
                         {
-                            int v0 = (int)((ReadAxis(cfg.Steer, true) + 1f) * 50f), v1 = (int)(ReadAxis(cfg.Throt, false) * 100f), v2 = (int)(ReadAxis(cfg.Brake, false) * 100f), v3 = (int)(ReadAxis(cfg.Clutch, false) * 100f), v4 = (int)(ReadAxis(cfg.Hb, false) * 100f);
-                            BeginInvoke(() => { if (axisBars.First() != null) { axisBars.ElementAt(0).Value = Math.Clamp(v0, 0, 100); axisBars.ElementAt(1).Value = Math.Clamp(v1, 0, 100); axisBars.ElementAt(2).Value = Math.Clamp(v2, 0, 100); axisBars.ElementAt(3).Value = Math.Clamp(v3, 0, 100); axisBars.ElementAt(4).Value = Math.Clamp(v4, 0, 100); } });
+                            lastUiTick = now;
+                            axisVals.SetValue(Math.Clamp((int)((ReadAxis(cfg.Steer, true) + 1f) * 50f), 0, 100), 0);
+                            axisVals.SetValue(Math.Clamp((int)(ReadAxis(cfg.Throt, false) * 100f), 0, 100), 1);
+                            axisVals.SetValue(Math.Clamp((int)(ReadAxis(cfg.Brake, false) * 100f), 0, 100), 2);
+                            axisVals.SetValue(Math.Clamp((int)(ReadAxis(cfg.Clutch, false) * 100f), 0, 100), 3);
+                            axisVals.SetValue(Math.Clamp((int)(ReadAxis(cfg.Hb, false) * 100f), 0, 100), 4);
+                            BeginInvoke(() => { for (int k = 0; k < 5; k++) axisBars.ElementAt(k)?.Invalidate(); });
                         }
                     }
                     catch { }
-                    Thread.Sleep(10);
+                    Thread.Sleep(1);
+
                 }
             }) { IsBackground = true }.Start();
 
