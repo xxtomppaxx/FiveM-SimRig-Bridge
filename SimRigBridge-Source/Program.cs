@@ -10,6 +10,8 @@ using System.Text.Json;
 using System.Threading;
 using System.Windows.Forms;
 using SharpDX.DirectInput;
+using System.Net.WebSockets;
+using System.Threading.Tasks;
 
 namespace SimRigBridge
 {
@@ -441,7 +443,7 @@ namespace SimRigBridge
             new Thread(() => {
                 try
                 {
-                    var http = new HttpListener();
+                     var http = new HttpListener();
                     http.Prefixes.Add("http://127.0.0");
                     http.Start();
                     using var udp = new UdpClient();
@@ -454,16 +456,54 @@ namespace SimRigBridge
                         ctx.Response.AddHeader("Access-Control-Allow-Private-Network", "true");
                         if (ctx.Request.HttpMethod == "OPTIONS") { ctx.Response.StatusCode = 200; ctx.Response.Close(); continue; }
 
-                        using var r = new StreamReader(ctx.Request.InputStream);
-                        string body = r.ReadToEnd();
-                        var d = string.IsNullOrWhiteSpace(body) ? new TelemetryData() : (JsonSerializer.Deserialize<TelemetryData>(body) ?? new());
-
-                        if (d.active && !d.inAir)
+                        if (ctx.Request.IsWebSocketRequest)
                         {
-                            float g = cfg.Gain / 100f, cf = (cfg.Center / 100f) * 3500f, rf = (cfg.Road / 100f) * 2000f;
-                            float sf = Math.Clamp(d.speed / 25f, 0.1f, 1.5f);
-                            int mag = (int)(((-d.steer * sf * cf) + (d.lateral * cf * 0.45f) + (d.bump * rf)) * g);
-                            SetForce(mag);
+                            _ = Task.Run(async () =>
+                            {
+                                try
+                                {
+                                    var wsCtx = await ctx.AcceptWebSocketAsync(null);
+                                    var ws = wsCtx.WebSocket;
+                                    var buf = new byte[N4096];
+                                    while (ws.State == WebSocketState.Open && running)
+                                    {
+                                        var res = await ws.ReceiveAsync(new ArraySegment<byte>(buf), CancellationToken.None);
+                                        if (res.MessageType == WebSocketMessageType.Close) break;
+                                        string body = Encoding.UTF8.GetString(buf, 0, res.Count);
+                                        var d = string.IsNullOrWhiteSpace(body) ? new TelemetryData() : (JsonSerializer.Deserialize<TelemetryData>(body) ?? new());
+
+                                        if (d.active && !d.inAir)
+                                        {
+                                            float g = cfg.Gain / 100f, cf = (cfg.Center / 100f) * 3500f, rf = (cfg.Road / 100f) * 2000f;
+                                            float sf = Math.Clamp(d.speed / 25f, 0.1f, 1.5f);
+                                            int mag = (int)(((-d.steer * sf * cf) + (d.lateral * cf * 0.45f) + (d.bump * rf)) * g);
+                                            SetForce(mag);
+                                        }
+                                        else SetForce(0);
+
+                                        if (cfg.UdpOn && d.active)
+                                        {
+                                            byte[] pkt = Encoding.UTF8.GetBytes(body);
+                                            udp.Send(pkt, pkt.Length, "127.0.0.1", cfg.UdpPort);
+                                        }
+
+                                        string[] cmds;
+                                        lock (pendingCmds) { cmds = pendingCmds.ToArray(); pendingCmds.Clear(); }
+
+                                        var respObj = new { active = true, steer = ReadAxis(cfg.Steer, true), throt = ReadAxis(cfg.Throt, false), brake = ReadAxis(cfg.Brake, false), clutch = ReadAxis(cfg.Clutch, false), hb = ReadAxis(cfg.Hb, false), cmds };
+                                        byte[] outBuf = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(respObj));
+                                        await ws.SendAsync(new ArraySegment<byte>(outBuf), WebSocketMessageType.Text, true, CancellationToken.None);
+                                    }
+                                }
+                                catch { }
+                            });
+                            continue;
+                        }
+
+                        ctx.Response.StatusCode = 200;
+                        ctx.Response.Close();
+                    }
+
                         }
                         else SetForce(0);
 
