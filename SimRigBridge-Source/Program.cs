@@ -13,7 +13,8 @@ using SharpDX.DirectInput;
 
 namespace SimRigBridge
 {
-    public class AxisBind { public Guid Dev { get; set; } public int Axis { get; set; } public bool Inv { get; set; } }
+        public class AxisBind { public Guid Dev { get; set; } public int Axis { get; set; } public bool Inv { get; set; } public int Min { get; set; } = 0; public int Max { get; set; } = 100; }
+
     public class BtnBind { public Guid Dev { get; set; } public int Btn { get; set; } public string Cmd { get; set; } }
 
     public class RigConfig
@@ -66,13 +67,21 @@ namespace SimRigBridge
         private CheckBox invFfbChk, udpChk;
         private TrackBar gainSld, centSld, roadSld;
         private Label statusLbl, bindStatusLbl;
-        private ListBox btnList;
+                private ListBox btnList;
         private TextBox cmdBox;
+        private ProgressBar[] axisBars = new ProgressBar[5];
+        private TrackBar[] minSlds = new TrackBar[5], maxSlds = new TrackBar[5];
+        private Label[] minLbls = new Label[5], maxLbls = new Label[5];
+        private string[] wizQueue = Array.Empty<string>();
+        private int wizStep = 0;
+        private Button skipBtn;
+        private bool wasInGear = false;
 
         public MainForm()
         {
-            Text = "TompanServeri SimRig Bridge (FFB + Pedals + Shifters + Boxes + VAM/HF8)";
-            Size = new Size(540, 460);
+            Text = "TompanServeri SimRig Bridge v1.2 (FFB + Pedals + Shifters + Boxes + VAM/HF8)";
+            Size = new Size(640, 560);
+
             FormBorderStyle = FormBorderStyle.FixedSingle;
             MaximizeBox = false;
             BackColor = Color.FromArgb(28, 28, 32);
@@ -106,7 +115,7 @@ namespace SimRigBridge
 
         private void BuildUI()
         {
-            var tabs = new TabControl { Dock = DockStyle.Top, Height = 385 };
+            var tabs = new TabControl { Dock = DockStyle.Top, Height = 485 };
             var t1 = new TabPage("1. Ratti & FFB") { BackColor = BackColor };
             var t2 = new TabPage("2. Polkimet & Käsijarru") { BackColor = BackColor };
             var t3 = new TabPage("3. Vaihteet, Boxit & VAM/HF8") { BackColor = BackColor };
@@ -140,15 +149,29 @@ namespace SimRigBridge
 
             string[] names = { "Ohjaus (Steer)", "Kaasu (Throttle)", "Jarru (Brake)", "Kytkin (Clutch)", "Käsijarru (Handbrake)" };
             string[] keys = { "steer", "throt", "brake", "clutch", "hb" };
-            for (int i = 0; i < names.Length; i++)
+                      for (int i = 0; i < names.Length; i++)
             {
+                int idx = i;
                 string k = keys[i];
-                var b = new Button { Text = $"Tunnista: {names[i]}", Location = new Point(15, 50 + i * 45), Width = 220, Height = 32, BackColor = Color.FromArgb(55, 55, 65), FlatStyle = FlatStyle.Flat };
+                int y = 45 + i * 82;
+                var b = new Button { Text = $"Tunnista: {names[i]}", Location = new Point(15, y), Width = 190, Height = 28, BackColor = Color.FromArgb(55, 55, 65), FlatStyle = FlatStyle.Flat };
                 b.Click += (s, e) => StartAxisListen(k);
-                var invB = new Button { Text = "Käännä akseli", Location = new Point(250, 50 + i * 45), Width = 120, Height = 32, BackColor = Color.FromArgb(45, 45, 50), FlatStyle = FlatStyle.Flat };
+                var invB = new Button { Text = "Käännä", Location = new Point(212, y), Width = 75, Height = 28, BackColor = Color.FromArgb(45, 45, 50), FlatStyle = FlatStyle.Flat };
                 invB.Click += (s, e) => ToggleInvert(k);
-                t2.Controls.AddRange(new Control[] { b, invB });
+                axisBars[idx] = new ProgressBar { Location = new Point(295, y + 2), Width = 310, Height = 24, Maximum = 100 };
+
+                var ab = GetBind(k);
+                minLbls[idx] = new Label { Text = $"Min: {ab?.Min ?? 0}%", Location = new Point(15, y + 34), Width = 75, AutoSize = false };
+                minSlds[idx] = new TrackBar { Location = new Point(90, y + 30), Width = 195, Maximum = 95, TickStyle = TickStyle.None, Value = ab?.Min ?? 0 };
+                minSlds[idx].ValueChanged += (s, e) => { var x = GetBind(k); if (x != null) { x.Min = minSlds[idx].Value; minLbls[idx].Text = $"Min: {x.Min}%"; SaveCfg(); } };
+
+                maxLbls[idx] = new Label { Text = $"Max: {ab?.Max ?? 100}%", Location = new Point(295, y + 34), Width = 80, AutoSize = false };
+                maxSlds[idx] = new TrackBar { Location = new Point(375, y + 30), Width = 230, Minimum = 5, Maximum = 100, TickStyle = TickStyle.None, Value = ab?.Max ?? 100 };
+                maxSlds[idx].ValueChanged += (s, e) => { var x = GetBind(k); if (x != null) { x.Max = maxSlds[idx].Value; maxLbls[idx].Text = $"Max: {x.Max}%"; SaveCfg(); } };
+
+                t2.Controls.AddRange(new Control[] { b, invB, axisBars[idx], minLbls[idx], minSlds[idx], maxLbls[idx], maxSlds[idx] });
             }
+
 
             udpChk = new CheckBox { Text = "Haptiikka UDP (SimHub / Simsonn VAM / NLR HF8 - portti 20777)", Location = new Point(15, 15), Checked = cfg.UdpOn, AutoSize = true, ForeColor = Color.LightGreen };
             udpChk.CheckedChanged += (s, e) => { cfg.UdpOn = udpChk.Checked; SaveCfg(); };
@@ -162,10 +185,20 @@ namespace SimRigBridge
             RefreshBtnList();
 
             var delBtn = new Button { Text = "Poista valittu", Location = new Point(15, 308), Width = 120, BackColor = Color.DarkRed, FlatStyle = FlatStyle.Flat };
-            delBtn.Click += (s, e) => { if (btnList.SelectedIndex >= 0) { cfg.Btns.RemoveAt(btnList.SelectedIndex); SaveCfg(); RefreshBtnList(); } };
+                        delBtn.Click += (s, e) => { if (btnList.SelectedIndex >= 0) { cfg.Btns.RemoveAt(btnList.SelectedIndex); SaveCfg(); RefreshBtnList(); } };
 
-            t3.Controls.AddRange(new Control[] { udpChk, cmdLbl, cmdBox, addBtn, btnList, delBtn });
-            tabs.TabPages.AddRange(new[] { t1, t2, t3 });
+            var hWizBtn = new Button { Text = "Velho: H-kaavio (R, 1–6)", Location = new Point(140, 315), Width = 165, Height = 28, BackColor = Color.FromArgb(0, 130, 90), FlatStyle = FlatStyle.Flat };
+            hWizBtn.Click += (s, e) => StartWizard(new[] { "gear_r", "gear_1", "gear_2", "gear_3", "gear_4", "gear_5", "gear_6" });
+
+            var sqWizBtn = new Button { Text = "Velho: SQ (Ylös/Alas)", Location = new Point(315, 315), Width = 145, Height = 28, BackColor = Color.FromArgb(0, 120, 180), FlatStyle = FlatStyle.Flat };
+            sqWizBtn.Click += (s, e) => StartWizard(new[] { "gear_up", "gear_down" });
+
+            skipBtn = new Button { Text = "Ohita", Location = new Point(470, 315), Width = 70, Height = 28, BackColor = Color.FromArgb(80, 80, 90), FlatStyle = FlatStyle.Flat, Visible = false };
+            skipBtn.Click += (s, e) => NextWizardStep();
+
+            t3.Controls.AddRange(new Control[] { udpChk, cmdLbl, cmdBox, addBtn, btnList, delBtn, hWizBtn, sqWizBtn, skipBtn });
+                    tabs.TabPages.AddRange(new[] { t1, t2, t3 });
+
 
             statusLbl = new Label { Text = "Valmis. Kytkettyjä USB-ohjaimia: " + sticks.Count, Dock = DockStyle.Bottom, Height = 30, TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(15, 0, 0, 0), ForeColor = Color.LightGreen };
             Controls.AddRange(new Control[] { tabs, statusLbl });
@@ -184,22 +217,39 @@ namespace SimRigBridge
             bindStatusLbl.Text = $"Liikuta nyt: {key.ToUpper()}...";
         }
 
+                private AxisBind? GetBind(string k) => k switch { "steer" => cfg.Steer, "throt" => cfg.Throt, "brake" => cfg.Brake, "clutch" => cfg.Clutch, "hb" => cfg.Hb, _ => null };
+
+        private void StartWizard(string[] steps)
+        {
+            wizQueue = steps; wizStep = 0; listenTarget = "wiz"; skipBtn.Visible = true;
+            statusLbl.Text = $"Velho (1/{wizQueue.Length}): Laita päälle -> {wizQueue.First()}";
+        }
+
+        private void NextWizardStep()
+        {
+            wizStep++;
+            if (wizStep >= wizQueue.Length) { listenTarget = ""; skipBtn.Visible = false; statusLbl.Text = "Vaihteiden tunnistus valmis!"; }
+            else statusLbl.Text = $"Velho ({wizStep + 1}/{wizQueue.Length}): Laita päälle -> {wizQueue.ElementAt(wizStep)}";
+        }
+
         private void ToggleInvert(string k)
         {
-            var ab = k switch { "steer" => cfg.Steer, "throt" => cfg.Throt, "brake" => cfg.Brake, "clutch" => cfg.Clutch, "hb" => cfg.Hb, _ => null };
+            var ab = GetBind(k);
             if (ab != null) { ab.Inv = !ab.Inv; SaveCfg(); bindStatusLbl.Text = $"{k} suunta käännetty ({ab.Inv})"; }
         }
 
-        private int[] GetAxes(JoystickState s) => new[] { s.X, s.Y, s.Z, s.RotationX, s.RotationY, s.RotationZ, s.Sliders[0], s.Sliders[1] };
+        private int[] GetAxes(JoystickState s) => new[] { s.X, s.Y, s.Z, s.RotationX, s.RotationY, s.RotationZ, s.Sliders.ElementAtOrDefault(0), s.Sliders.ElementAtOrDefault(1) };
 
-        private float ReadAxis(AxisBind b, bool centered)
+        private float ReadAxis(AxisBind? b, bool centered)
         {
             if (b == null || !sticks.TryGetValue(b.Dev, out var j)) return 0f;
-            int raw = GetAxes(j.GetCurrentState())[b.Axis];
-            float norm = raw / 65535f;
+            float norm = GetAxes(j.GetCurrentState())[b.Axis] / 65535f;
             if (b.Inv) norm = 1f - norm;
-            return centered ? (norm * 2f) - 1f : norm;
+            if (centered) return (norm * 2f) - 1f;
+            float minF = b.Min / 100f, maxF = Math.Max(minF + 0.01f, b.Max / 100f);
+            return Math.Clamp((norm - minF) / (maxF - minF), 0f, 1f);
         }
+
 
         private void ConnectFFB()
         {
@@ -253,12 +303,17 @@ namespace SimRigBridge
                                         break;
                                     }
                             }
-                            for (int b = 0; b < st.Buttons.Length; b++)
+                                                       for (int b = 0; b < st.Buttons.Length; b++)
                             {
                                 int idx = Math.Abs((kv.Key.GetHashCode() + b) % 512);
                                 if (st.Buttons[b] && !prevBtns[idx])
                                 {
-                                    if (listenTarget == "btn")
+                                    if (listenTarget == "wiz")
+                                    {
+                                        string cmd = wizQueue.ElementAt(wizStep);
+                                        Invoke(() => { cfg.Btns.RemoveAll(x => x.Cmd == cmd); cfg.Btns.Add(new BtnBind { Dev = kv.Key, Btn = b, Cmd = cmd }); SaveCfg(); RefreshBtnList(); NextWizardStep(); });
+                                    }
+                                    else if (listenTarget == "btn")
                                     {
                                         listenTarget = "";
                                         Invoke(() => { cfg.Btns.Add(new BtnBind { Dev = kv.Key, Btn = b, Cmd = cmdBox.Text }); SaveCfg(); RefreshBtnList(); statusLbl.Text = $"Nappi {b + 1} sidottu!"; });
@@ -272,9 +327,24 @@ namespace SimRigBridge
                                 prevBtns[idx] = st.Buttons[b];
                             }
                         }
+
+                        var hGears = cfg.Btns.Where(x => x.Cmd == "gear_r" || (x.Cmd.StartsWith("gear_") && x.Cmd.Length == 6 && char.IsDigit(x.Cmd.Last()))).ToList();
+                        if (hGears.Count > 0)
+                        {
+                            bool anyHeld = hGears.Any(g => sticks.TryGetValue(g.Dev, out var j) && g.Btn < j.GetCurrentState().Buttons.Length && j.GetCurrentState().Buttons.ElementAt(g.Btn));
+                            if (anyHeld) wasInGear = true;
+                            else if (wasInGear) { wasInGear = false; lock (pendingCmds) pendingCmds.Add("gear_n"); }
+                        }
+
+                        if (IsHandleCreated)
+                        {
+                            int v0 = (int)((ReadAxis(cfg.Steer, true) + 1f) * 50f), v1 = (int)(ReadAxis(cfg.Throt, false) * 100f), v2 = (int)(ReadAxis(cfg.Brake, false) * 100f), v3 = (int)(ReadAxis(cfg.Clutch, false) * 100f), v4 = (int)(ReadAxis(cfg.Hb, false) * 100f);
+                            BeginInvoke(() => { if (axisBars.First() != null) { axisBars.ElementAt(0).Value = Math.Clamp(v0, 0, 100); axisBars.ElementAt(1).Value = Math.Clamp(v1, 0, 100); axisBars.ElementAt(2).Value = Math.Clamp(v2, 0, 100); axisBars.ElementAt(3).Value = Math.Clamp(v3, 0, 100); axisBars.ElementAt(4).Value = Math.Clamp(v4, 0, 100); } });
+                        }
                     }
                     catch { }
                     Thread.Sleep(10);
+
                 }
             }) { IsBackground = true }.Start();
 
