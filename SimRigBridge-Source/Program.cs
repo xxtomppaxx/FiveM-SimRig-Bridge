@@ -301,6 +301,7 @@ namespace SimRigBridge
                 ffbWheel = new Joystick(di, guid);
                 ffbWheel.SetCooperativeLevel(Handle, CooperativeLevel.Background | CooperativeLevel.Exclusive);
                 ffbWheel.Acquire();
+                ffbWheel.SendForceFeedbackCommand(ForceFeedbackCommand.Reset);
 
                 var effParams = new EffectParameters
                 {
