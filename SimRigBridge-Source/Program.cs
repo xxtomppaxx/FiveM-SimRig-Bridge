@@ -40,6 +40,7 @@ namespace SimRigBridge
         public int Damper { get; set; } = 55;
         public int Road { get; set; } = 45;
         public int SteerDeg { get; set; } = 900;
+        public int SteerGamma { get; set; } = 180; // 100 = lineaarinen (1.0), 180 = pehmennetty keskialue (1.8)
         public int Softlock { get; set; } = 85;
         public bool InvFfb { get; set; } = false;
         public bool InvSpring { get; set; } = false;
@@ -101,7 +102,8 @@ namespace SimRigBridge
         private TrackBar springBar = new() { Minimum = 0, Maximum = 100, Width = 280 };
         private TrackBar damperBar = new() { Minimum = 0, Maximum = 100, Width = 280 };
         private TrackBar roadBar = new() { Minimum = 0, Maximum = 100, Width = 280 };
-        private TrackBar degBar = new() { Minimum = 180, Maximum = 900, TickFrequency = 90, Width = 280 };
+        private TrackBar degBar = new() { Minimum = 180, Maximum = 1440, TickFrequency = 90, Width = 280 };
+        private TrackBar gammaBar = new() { Minimum = 100, Maximum = 250, TickFrequency = 10, Width = 280 };
         private TrackBar softlockBar = new() { Minimum = 0, Maximum = 100, Width = 280 };
         private CheckBox invFfbChk = new() { Text = "Käännä FFB-suunta (Invert Force)", AutoSize = true };
         private CheckBox invSpringChk = new() { Text = "Käännä Spring-suunta (Invert Spring)", AutoSize = true };
@@ -118,7 +120,7 @@ namespace SimRigBridge
         public MainForm()
         {
             Text = "SimRig FiveM Bridge & FFB (SW20 V3 / Moza / Simjack)";
-            Size = new Size(575, 690);
+            Size = new Size(575, 735);
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
             LoadCfg();
@@ -144,7 +146,8 @@ namespace SimRigBridge
             springBar.Value = Math.Clamp(cfg.Spring, 0, 100);
             damperBar.Value = Math.Clamp(cfg.Damper, 0, 100);
             roadBar.Value = Math.Clamp(cfg.Road, 0, 100);
-            degBar.Value = Math.Clamp(cfg.SteerDeg, 180, 900);
+            degBar.Value = Math.Clamp(cfg.SteerDeg, 180, 1440);
+            gammaBar.Value = Math.Clamp(cfg.SteerGamma, 100, 250);
             softlockBar.Value = Math.Clamp(cfg.Softlock, 0, 100);
             invFfbChk.Checked = cfg.InvFfb;
             invSpringChk.Checked = cfg.InvSpring;
@@ -156,7 +159,8 @@ namespace SimRigBridge
             p1.Controls.Add(MakeSliderRow("Keskitysjousi (Spring %):", springBar, v => { cfg.Spring = v; SaveCfg(); }));
             p1.Controls.Add(MakeSliderRow("Vaimennus (Damper %):", damperBar, v => { cfg.Damper = v; SaveCfg(); }));
             p1.Controls.Add(MakeSliderRow("Tienpinta / Töyssyt (%):", roadBar, v => { cfg.Road = v; SaveCfg(); }));
-            p1.Controls.Add(MakeSliderRow("Kääntösäde (180–900°):", degBar, v => { cfg.SteerDeg = v; SaveCfg(); }, "°"));
+            p1.Controls.Add(MakeSliderRow("Kääntösäde (180–1440°):", degBar, v => { cfg.SteerDeg = v; SaveCfg(); }, "°"));
+            p1.Controls.Add(MakeSliderRow("Ohjauksen käyrä (Gamma %):", gammaBar, v => { cfg.SteerGamma = v; SaveCfg(); }, "%"));
             p1.Controls.Add(MakeSliderRow("Softlock-rajoitin (%):", softlockBar, v => { cfg.Softlock = v; SaveCfg(); }));
 
             var rowInv = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight };
@@ -271,6 +275,11 @@ namespace SimRigBridge
                 try { springEffect?.Stop(); springEffect?.Dispose(); } catch { }
                 try { damperEffect?.Stop(); damperEffect?.Dispose(); } catch { }
                 try { ffbWheel?.Unacquire(); ffbWheel?.Dispose(); } catch { }
+                foreach (var kv in sticks)
+                {
+                    try { kv.Value.Unacquire(); kv.Value.Dispose(); } catch { }
+                }
+                try { di.Dispose(); } catch { }
             };
         }
 
@@ -285,7 +294,7 @@ namespace SimRigBridge
         private Control MakeSliderRow(string title, TrackBar tb, Action<int> onChg, string unit = "")
         {
             var p = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight };
-            var lbl = new Label { Text = $"{title} {tb.Value}{unit}", Width = 205 };
+            var lbl = new Label { Text = $"{title} {tb.Value}{unit}", Width = 215 };
             tb.ValueChanged += (_, _) => { lbl.Text = $"{title} {tb.Value}{unit}"; onChg(tb.Value); };
             p.Controls.AddRange(new Control[] { lbl, tb });
             return p;
@@ -462,7 +471,8 @@ namespace SimRigBridge
         {
             if (constEffect == null || ffbWheel == null) return;
             smoothForce = (smoothForce * 0.78f) + (mag * 0.22f);
-            int val = Math.Clamp(cfg.InvFfb ? -(int)smoothForce : (int)smoothForce, -9000, 9000);
+            // InvFfb on jo sovellettu pelin voimiin ennen Softlockin lisäämistä
+            int val = Math.Clamp((int)smoothForce, -9000, 9000);
             int rawSpring = Math.Clamp(springCoeff, 0, 10000);
             int sVal = cfg.InvSpring ? -rawSpring : rawSpring;
             int dVal = Math.Clamp(damperCoeff, 0, 10000);
@@ -531,8 +541,13 @@ namespace SimRigBridge
             float cVal = norm * 2f - 1f;
             if (ReferenceEquals(b, cfg.Steer))
             {
-                float ratio = Math.Clamp(cfg.SteerDeg / 900f, 0.2f, 1.0f);
+                // 1. Kääntösäteen skaalaus (< 900 herkentää, > 900 rauhoittaa)
+                float ratio = Math.Clamp(cfg.SteerDeg / 900f, 0.2f, 2.0f);
                 cVal = Math.Clamp(cVal / ratio, -1f, 1f);
+
+                // 2. Gamma-käyrä keskialueen pehmentämiseen 900° ratilla (esim. 180% -> gamma 1.8)
+                float gamma = Math.Clamp(cfg.SteerGamma / 100f, 1.0f, 2.5f);
+                cVal = Math.Sign(cVal) * (float)Math.Pow(Math.Abs(cVal), gamma);
             }
             return cVal;
         }
@@ -684,7 +699,11 @@ namespace SimRigBridge
                                             float rpmVib = (d.speed < 3f) ? (float)Math.Sin(Environment.TickCount64 * 0.08 * (0.5f + d.rpm)) * 120f : 0f;
                                             float roadForce = (safeBump * rf) + skidVib + rpmVib;
 
-                                            // 4) Softlock-päätyrajoitin: jyrkkä palautusvoima, kun fyysinen kulma saavuttaa valitun kääntösäteen rajan
+                                            // Käännä vain pelin voimat InvFfb-asetuksen mukaan
+                                            float gameForce = (latForce + roadForce) * g;
+                                            if (cfg.InvFfb) gameForce = -gameForce;
+
+                                            // 4) Softlock-päätyrajoitin: työntää AINA kohti keskustaa (-Math.Sign(rawSteer)), riippumatta InvFfb-asetuksesta
                                             float rawSteer = ReadRawSteer();
                                             float limitNorm = Math.Clamp(cfg.SteerDeg / 900f, 0.2f, 1.0f);
                                             float softStart = Math.Max(limitNorm - 0.03f, 0.15f);
@@ -698,7 +717,7 @@ namespace SimRigBridge
                                                 targetDamper = Math.Clamp(targetDamper + (int)(2500f * softlockPct), 0, 9500);
                                             }
 
-                                            targetForce = (int)(((latForce + roadForce) * g) + softForce);
+                                            targetForce = (int)(gameForce + softForce);
                                         }
                                         else
                                         {
