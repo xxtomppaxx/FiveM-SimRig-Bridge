@@ -1,1 +1,58 @@
-<html><body><script>window.addEventListener("message",e=>{if(e.data?.type==="telemetry")fetch("http://127.0.0"+".1:8765/",{method:"POST",body:JSON.stringify(e.data)}).then(r=>r.json()).then(d=>fetch(`https://${GetParentResourceName()}/input`,{method:"POST",body:JSON.stringify(d)}).catch(()=>{})).catch(()=>{})})</script></body></html>
+<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+body{margin:0;font-family:Segoe UI,sans-serif;color:#fff;user-select:none}
+#box{display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);width:390px;background:rgba(15,18,24,.95);border:1px solid #2e384d;border-radius:10px;padding:18px;box-shadow:0 12px 35px rgba(0,0,0,.7)}
+h3{margin:0 0 8px;font-size:16px;display:flex;justify-content:space-between;align-items:center}
+.st{font-size:12px;padding:2px 8px;border-radius:4px;background:#5c1d1d}.st.ok{background:#1b5e20}
+.row{margin:10px 0}.lbl{display:flex;justify-content:space-between;font-size:13px;margin-bottom:3px}
+input[type=range]{width:100%;accent-color:#3b82f6;cursor:pointer}
+.foot{display:flex;justify-content:space-between;align-items:center;margin-top:14px;font-size:13px}
+button{background:#2563eb;color:#fff;border:none;padding:6px 14px;border-radius:5px;cursor:pointer}
+</style></head><body><div id="box">
+<h3>SimRig FFB Säädöt (F10) <span id="st" class="st">Bridge: Ei yhteyttä</span></h3>
+<div class="row"><div class="lbl"><span>Kokonaisvoima (Gain)</span><b id="v_gain">55%</b></div><input id="gain" type="range" min="0" max="100" value="55"></div>
+<div class="row"><div class="lbl"><span>Keskitys / Palautus (Center)</span><b id="v_center">85%</b></div><input id="center" type="range" min="0" max="100" value="85"></div>
+<div class="row"><div class="lbl"><span>Aloitusvoima (MinForce)</span><b id="v_minForce">18%</b></div><input id="minForce" type="range" min="0" max="50" value="18"></div>
+<div class="row"><div class="lbl"><span>Tienpinta / Kanttarit (Road)</span><b id="v_road">45%</b></div><input id="road" type="range" min="0" max="100" value="45"></div>
+<div class="row"><div class="lbl"><span>Kääntösäde</span><b id="v_steerAngle">900°</b></div><input id="steerAngle" type="range" min="180" max="900" step="10" value="900"></div>
+<div class="row"><div class="lbl"><span>Softlock-rajoitin</span><b id="v_softlock">80%</b></div><input id="softlock" type="range" min="0" max="100" value="80"></div>
+<div class="foot"><label><input id="invFfb" type="checkbox"> Käännä FFB-suunta</label><button onclick="cls()">Sulje (F10 / ESC)</button></div>
+</div><script>
+let ws=null,synced=false;
+const ids=["gain","center","minForce","road","steerAngle","softlock"];
+function updLbl(){ids.forEach(k=>document.getElementById("v_"+k).textContent=document.getElementById(k).value+(k==="steerAngle"?"°":"%"))}
+function conn(){
+  if(ws&&(ws.readyState===0||ws.readyState===1))return;
+  try{ws=new WebSocket("ws://127.0.0.1:8765/")}catch{return}
+  ws.onopen=()=>{const s=document.getElementById("st");s.textContent="Bridge: OK";s.className="st ok"};
+  ws.onclose=()=>{const s=document.getElementById("st");s.textContent="Bridge: Ei yhteyttä";s.className="st";synced=false;setTimeout(conn,1500)};
+  ws.onerror=()=>{try{ws.close()}catch{}};
+  ws.onmessage=ev=>{
+    try{
+      const d=JSON.parse(ev.data);
+      fetch(`https://${GetParentResourceName()}/input`,{method:"POST",body:JSON.stringify(d)}).catch(()=>{});
+      if(d.cfg&&!synced){
+        synced=true;
+        ids.forEach(k=>{if(d.cfg[k]!==undefined)document.getElementById(k).value=d.cfg[k]});
+        document.getElementById("invFfb").checked=!!d.cfg.invFfb;
+        updLbl();
+      }
+    }catch{}
+  };
+}
+function sendCfg(){
+  updLbl();
+  if(!ws||ws.readyState!==1)return;
+  const msg={cmd:"cfgUpdate",invFfb:document.getElementById("invFfb").checked};
+  ids.forEach(k=>msg[k]=parseInt(document.getElementById(k).value));
+  ws.send(JSON.stringify(msg));
+}
+ids.forEach(k=>document.getElementById(k).addEventListener("input",sendCfg));
+document.getElementById("invFfb").addEventListener("change",sendCfg);
+function cls(){document.getElementById("box").style.display="none";fetch(`https://${GetParentResourceName()}/close`,{method:"POST",body:"{}"}).catch(()=>{})}
+window.addEventListener("keydown",e=>{if(e.key==="Escape"||e.key==="F10")cls()});
+window.addEventListener("message",e=>{
+  if(e.data?.type==="ui"){document.getElementById("box").style.display=e.data.open?"block":"none";if(e.data.open)synced=false}
+  if(e.data?.type==="telemetry"){conn();if(ws&&ws.readyState===1)ws.send(JSON.stringify(e.data))}
+});
+conn();
+</script></body></html>
