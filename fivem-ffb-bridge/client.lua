@@ -23,7 +23,7 @@ CreateThread(function()
             if inp.active then
                 
                 local maxAng = 35.0
-                local dz=0.012; local raw=inp.steer*1.5; if math.abs(raw)>dz then local st=math.max(-1.0,math.min(1.0,(raw-(raw>0 and dz or -dz))/(1.0-dz))); local curve=(st>0 and 1 or -1)*math.pow(math.abs(st),0.55); local padSt=(st>0 and 1 or -1)*(0.24+math.abs(curve)*0.68); local spd=GetEntitySpeed(v); local maxDeg=math.max(11.0,28.0-(spd*0.6)); SetControlNormal(0,59,padSt); SetVehicleSteeringAngle(v,math.rad(-curve*maxDeg)) else SetVehicleSteeringAngle(v,0.0) end;
+                local st=math.max(-1.0,math.min(1.0,inp.steer*1.35)); if math.abs(st)>0.003 then local s=math.abs(st); local shaped=s^0.7; local padSt=(st>0 and 1 or -1)*(0.16+shaped*0.84); SetControlNormal(0,59,padSt) end;
                 if inp.throt>0.02 then SetControlNormal(0,71,inp.throt); if IsVehicleOnAllWheels(v) and (inp.clutch or 0)<0.7 and targetGear~=-1 then local d=(targetGear==0) and -1.0 or 1.0; ApplyForceToEntityCenterOfMass(v,1,0.0,d*inp.throt*0.55,-0.25,false,true,true,false) end end; if inp.brake>0.02 then if manualMode and targetGear~=0 and GetEntitySpeed(v)<0.5 then SetVehicleHandbrake(v,true) else SetControlNormal(0,72,inp.brake) end end; if (inp.hb or 0.0) <= 0.05 then SetVehicleHandbrake(v, false) end
                 if (inp.hb or 0.0) > 0.05 then SetControlNormal(0, 76, inp.hb) end
                 local clutch = inp.clutch or 0.0
