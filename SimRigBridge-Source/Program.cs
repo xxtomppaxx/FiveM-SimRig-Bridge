@@ -471,7 +471,7 @@ namespace SimRigBridge
         private void UpdateEffects(int mag, int springCoeff, int damperCoeff)
         {
             if (constEffect == null || ffbWheel == null) return;
-            smoothForce = (smoothForce * 0.78f) + (mag * 0.22f);
+            smoothForce = (smoothForce * 0.62f) + (mag * 0.38f);
             // InvFfb on jo sovellettu pelin voimiin ennen Softlockin lisäämistä
             int val = Math.Clamp((int)smoothForce, -9000, 9000);
             int rawSpring = Math.Clamp(springCoeff, 0, 10000);
@@ -720,8 +720,8 @@ namespace SimRigBridge
                                             // 3) ConstantForce: kaarre-G-voimat + tienpinnan töyssyt ja luistovärinä
                                             float rawSteerCenter = ReadRawSteer();
                                             float absSteerCenter = Math.Abs(rawSteerCenter);
-                                            float minBoost = (absSteerCenter > 0.001f) ? (cfg.MinForce / 100f) * 3200f : 0f;
-                                            float centerSpring = (absSteerCenter > 0.001f) ? -Math.Sign(rawSteerCenter) * (minBoost + (float)Math.Pow(absSteerCenter, 0.55) * 4200f) * centerPct * (0.4f + 0.6f * speedNorm) : 0f;
+                                            float minBoost = (absSteerCenter > 0.002f) ? (cfg.MinForce / 100f) * 5500f * centerPct : 0f;
+                                            float centerSpring = (absSteerCenter > 0.002f) ? -Math.Sign(rawSteerCenter) * (minBoost + ((float)Math.Pow(absSteerCenter, 0.55) * 4400f * centerPct * (0.45f + 0.55f * speedNorm))) : 0f;
                                             float latForce = (-safeLat * (2400f + 1600f * speedNorm) * centerPct) + centerSpring;
                                             float skidVib = (d.skid > 1.2f) ? (float)Math.Sin(Environment.TickCount64 * 0.14) * Math.Min((d.skid - 1.2f) * 700f, 1500f) : 0f;
                                             float rpmVib = (d.speed < 3f) ? (float)Math.Sin(Environment.TickCount64 * 0.08 * (0.5f + d.rpm)) * 120f : 0f;
