@@ -8,7 +8,7 @@ input[type=range]{width:100%;accent-color:#3b82f6;cursor:pointer}
 .foot{display:flex;justify-content:space-between;align-items:center;margin-top:14px;font-size:13px}
 button{background:#2563eb;color:#fff;border:none;padding:6px 14px;border-radius:5px;cursor:pointer}
 </style></head><body><div id="box">
-<h3>SimRig FFB Säädöt (F10) <span id="st" class="st">Bridge: Ei yhteyttä</span></h3>
+<h3>SimRig FFB Säädöt (F10) <span id="st" class="st">Bridge: Ei yhteyttä</span></h3><div class='row'><div class='lbl'><span>Vaihteisto</span><b id='v_gmode'>AUTO</b></div><div style='display:flex;gap:6px'><button id='gm_auto' onclick='setGm("auto")' style='flex:1'>Auto</button><button id='gm_sq' onclick='setGm("sq")' style='flex:1;background:#334155'>SQ</button><button id='gm_h' onclick='setGm("h")' style='flex:1;background:#334155'>H-Kaavio</button></div></div>
 <div class="row"><div class="lbl"><span>Kokonaisvoima (Gain)</span><b id="v_gain">55%</b></div><input id="gain" type="range" min="0" max="100" value="55"></div>
 <div class="row"><div class="lbl"><span>Keskitys / Palautus (Center)</span><b id="v_center">85%</b></div><input id="center" type="range" min="0" max="100" value="85"></div>
 <div class="row"><div class="lbl"><span>Aloitusvoima (MinForce)</span><b id="v_minForce">18%</b></div><input id="minForce" type="range" min="0" max="50" value="18"></div>
@@ -28,7 +28,7 @@ function conn(){
   ws.onerror=()=>{try{ws.close()}catch{}};
   ws.onmessage=ev=>{
     try{
-      const d=JSON.parse(ev.data);
+      const d=JSON.parse(ev.data);if(d.throt!==undefined){document.getElementById('bt').style.height=(d.throt*100)+'%';document.getElementById('bb').style.height=(d.brake*100)+'%';document.getElementById('bc').style.height=(d.clutch*100)+'%';document.getElementById('bh').style.height=((d.hb||0)*100)+'%'}if(d.cmds)d.cmds.forEach(c=>{if(c.startsWith('gear_')){const g=c.replace('gear_','').toUpperCase();if(g!=='AUTO')document.getElementById('hg').textContent=g}});if(d.throt!==undefined){document.getElementById('bt').style.height=(d.throt*100)+'%';document.getElementById('bb').style.height=(d.brake*100)+'%';document.getElementById('bc').style.height=(d.clutch*100)+'%';document.getElementById('bh').style.height=((d.hb||0)*100)+'%'}if(d.cmds)d.cmds.forEach(c=>{if(c.startsWith('gear_')){const g=c.replace('gear_','').toUpperCase();if(g!=='AUTO')document.getElementById('hg').textContent=g}});
       fetch(`https://${GetParentResourceName()}/input`,{method:"POST",body:JSON.stringify(d)}).catch(()=>{});
       if(d.cfg&&!synced){
         synced=true;
@@ -39,7 +39,7 @@ function conn(){
     }catch{}
   };
 }
-function sendCfg(){
+function sendCfg(){fetch(`https://${GetParentResourceName()}/steer_cfg`,{method:"POST",body:JSON.stringify({deg:document.getElementById("steerAngle").value})}).catch(()=>{});
   updLbl();
   if(!ws||ws.readyState!==1)return;
   const msg={cmd:"cfgUpdate",invFfb:document.getElementById("invFfb").checked};
@@ -48,6 +48,7 @@ function sendCfg(){
 }
 ids.forEach(k=>document.getElementById(k).addEventListener("input",sendCfg));
 document.getElementById("invFfb").addEventListener("change",sendCfg);
+function setGm(m){document.getElementById('v_gmode').textContent=m.toUpperCase();document.getElementById('hm').textContent=m.toUpperCase();['auto','sq','h'].forEach(x=>document.getElementById('gm_'+x).style.background=x===m?'#2563eb':'#334155');fetch(`https://${GetParentResourceName()}/gmode`,{method:'POST',body:JSON.stringify({mode:m})}).catch(()=>{})}
 function cls(){document.getElementById("box").style.display="none";fetch(`https://${GetParentResourceName()}/close`,{method:"POST",body:"{}"}).catch(()=>{})}
 window.addEventListener("keydown",e=>{if(e.key==="Escape"||e.key==="F10")cls()});
 window.addEventListener("message",e=>{
@@ -55,4 +56,4 @@ window.addEventListener("message",e=>{
   if(e.data?.type==="telemetry"){conn();if(ws&&ws.readyState===1)ws.send(JSON.stringify(e.data))}
 });
 conn();
-</script></body></html>
+</script><div id='hud' style='position:fixed;bottom:24px;right:24px;background:rgba(15,18,24,.9);border:1px solid #2e384d;border-radius:8px;padding:8px 12px;display:flex;gap:8px;align-items:flex-end;font-family:Segoe UI,sans-serif'><div id='hg' style='font-size:22px;font-weight:700;line-height:1;margin-right:4px'>N</div><div id='hm' style='font-size:10px;color:#94a3b8'>AUTO</div><div id='hm' style='font-size:10px;color:#94a3b8'>AUTO</div><div style='width:8px;height:44px;background:#1e293b;border-radius:3px;position:relative'><div id='bc' style='position:absolute;bottom:0;width:100%;height:0%;background:#3b82f6'></div></div><div style='width:8px;height:44px;background:#1e293b;border-radius:3px;position:relative'><div id='bb' style='position:absolute;bottom:0;width:100%;height:0%;background:#ef4444'></div></div><div style='width:8px;height:44px;background:#1e293b;border-radius:3px;position:relative'><div id='bt' style='position:absolute;bottom:0;width:100%;height:0%;background:#22c55e'></div></div><div style='width:8px;height:44px;background:#1e293b;border-radius:3px;position:relative'><div id='bh' style='position:absolute;bottom:0;width:100%;height:0%;background:#f59e0b'></div></div></div></body></html>
