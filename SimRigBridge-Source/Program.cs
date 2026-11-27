@@ -36,6 +36,7 @@ namespace SimRigBridge
         public Guid FfbDev { get; set; } = Guid.Empty;
         public int Gain { get; set; } = 50;
         public int Center { get; set; } = 85;
+        public int MinForce { get; set; } = 18;
         public int Spring { get; set; } = 80;
         public int Damper { get; set; } = 55;
         public int Road { get; set; } = 45;
@@ -580,8 +581,9 @@ namespace SimRigBridge
                     {
                         foreach (var kv in sticks)
                         {
-                            kv.Value.Poll();
-                            var st = kv.Value.GetCurrentState();
+                            JoystickState st;
+                            try { kv.Value.Poll(); st = kv.Value.GetCurrentState(); }
+                            catch { try { kv.Value.Acquire(); kv.Value.Poll(); st = kv.Value.GetCurrentState(); } catch { continue; } }
                             var cur = GetAxes(st);
                             if (listenTarget != "" && listenTarget != "btn" && listenTarget != "wiz" && baseAxes.TryGetValue(kv.Key, out var bAx))
                             {
@@ -644,7 +646,9 @@ namespace SimRigBridge
                     using var udp = new UdpClient();
                     while (running)
                     {
-                        var ctx = httpServer.GetContext();
+                        HttpListenerContext ctx;
+                        try { ctx = httpServer.GetContext(); }
+                        catch { if (!running) break; Thread.Sleep(50); continue; }
                         ctx.Response.AddHeader("Access-Control-Allow-Origin", "*");
                         ctx.Response.AddHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
                         ctx.Response.AddHeader("Access-Control-Allow-Headers", "Content-Type");
@@ -668,6 +672,26 @@ namespace SimRigBridge
                                         var res = await ws.ReceiveAsync(new ArraySegment<byte>(buf), CancellationToken.None);
                                         if (res.MessageType == WebSocketMessageType.Close) break;
                                         string body = Encoding.UTF8.GetString(buf, 0, res.Count);
+                                        if (!string.IsNullOrWhiteSpace(body) && body.Contains("\"cfgUpdate\""))
+                                        {
+                                            try
+                                            {
+                                                using var doc = JsonDocument.Parse(body);
+                                                if (doc.RootElement.TryGetProperty("cfg", out var el))
+                                                {
+                                                    if (el.TryGetProperty("gain", out var p1)) cfg.Gain = p1.GetInt32();
+                                                    if (el.TryGetProperty("center", out var p2)) cfg.Center = p2.GetInt32();
+                                                    if (el.TryGetProperty("minForce", out var p3)) cfg.MinForce = p3.GetInt32();
+                                                    if (el.TryGetProperty("road", out var p4)) cfg.Road = p4.GetInt32();
+                                                    if (el.TryGetProperty("steerAngle", out var p5)) cfg.SteerDeg = p5.GetInt32();
+                                                    if (el.TryGetProperty("softlock", out var p6)) cfg.Softlock = p6.GetInt32();
+                                                    if (el.TryGetProperty("invFfb", out var p7)) cfg.InvFfb = p7.GetBoolean();
+                                                    SaveCfg();
+                                                }
+                                            }
+                                            catch { }
+                                            continue;
+                                        }
                                         var d = string.IsNullOrWhiteSpace(body) ? new TelemetryData() : (JsonSerializer.Deserialize<TelemetryData>(body) ?? new());
 
                                         if (d.active && !d.inAir)
@@ -694,7 +718,11 @@ namespace SimRigBridge
                                             targetDamper = Math.Clamp((int)damperBase, 0, 8500);
 
                                             // 3) ConstantForce: kaarre-G-voimat + tienpinnan töyssyt ja luistovärinä
-                                            float latForce = -safeLat * (2800f + 1800f * speedNorm) * centerPct;
+                                            float rawSteerCenter = ReadRawSteer();
+                                            float absSteerCenter = Math.Abs(rawSteerCenter);
+                                            float minBoost = (absSteerCenter > 0.001f) ? (cfg.MinForce / 100f) * 3200f : 0f;
+                                            float centerSpring = (absSteerCenter > 0.001f) ? -Math.Sign(rawSteerCenter) * (minBoost + (float)Math.Pow(absSteerCenter, 0.55) * 4200f) * centerPct * (0.4f + 0.6f * speedNorm) : 0f;
+                                            float latForce = (-safeLat * (2400f + 1600f * speedNorm) * centerPct) + centerSpring;
                                             float skidVib = (d.skid > 1.2f) ? (float)Math.Sin(Environment.TickCount64 * 0.14) * Math.Min((d.skid - 1.2f) * 700f, 1500f) : 0f;
                                             float rpmVib = (d.speed < 3f) ? (float)Math.Sin(Environment.TickCount64 * 0.08 * (0.5f + d.rpm)) * 120f : 0f;
                                             float roadForce = (safeBump * rf) + skidVib + rpmVib;
