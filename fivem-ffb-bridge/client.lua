@@ -2,7 +2,7 @@ SetNuiFocus(false, false)
 local steerRatio = 1.95
 RegisterNUICallback("steer_cfg", function(d, cb) if d.deg then steerRatio = 900.0 / math.max(180.0, tonumber(d.deg)) end cb("ok") end)
 local inp = {active=false, steer=0.0, throt=0.0, brake=0.0, clutch=0.0, hb=0.0}
-local manualMode, targetGear, origHighGear, lastVeh, uiOpen = false, 1, nil, 0, false
+local manualMode, targetGear, origHighGear, lastVeh, uiOpen = true, -1, nil, 0, false
 RegisterCommand("ffb", function() uiOpen = not uiOpen; SetNuiFocus(uiOpen, uiOpen); SetNuiFocusKeepInput(uiOpen); SendNUIMessage({type="ui", open=uiOpen}) end, false)
 RegisterKeyMapping("ffb", "Avaa SimRig FFB -säädöt", "keyboard", "F10")
 RegisterNUICallback("gmode",function(d,cb) manualMode=(d.mode~="auto");cb("ok") end)
@@ -19,12 +19,12 @@ CreateThread(function()
     while true do
         local p = PlayerPedId(); local v = GetVehiclePedIsIn(p, false)
         if v ~= 0 and GetPedInVehicleSeat(v, -1) == p then
-            if v ~= lastVeh then lastVeh = v; origHighGear = GetVehicleHighGear(v); manualMode = false end
+            if v ~= lastVeh then lastVeh = v; origHighGear = GetVehicleHighGear(v); manualMode = true end
             if inp.active then
                 
                 local maxAng = 35.0
-                local st=math.max(-1.0,math.min(1.0,inp.steer*1.35)); if math.abs(st)>0.003 then local s=math.abs(st); local shaped=s^0.7; local padSt=(st>0 and 1 or -1)*(0.16+shaped*0.84); SetControlNormal(0,59,padSt) end;
-                if inp.throt>0.02 then SetControlNormal(0,71,inp.throt); if IsVehicleOnAllWheels(v) and (inp.clutch or 0)<0.7 and targetGear~=-1 then local d=(targetGear==0) and -1.0 or 1.0; ApplyForceToEntityCenterOfMass(v,1,0.0,d*inp.throt*0.55,-0.25,false,true,true,false) end end; if inp.brake>0.02 then if manualMode and targetGear~=0 and GetEntitySpeed(v)<0.5 then SetVehicleHandbrake(v,true) else SetControlNormal(0,72,inp.brake) end end; if (inp.hb or 0.0) <= 0.05 then SetVehicleHandbrake(v, false) end
+                local st=math.max(-1.0,math.min(1.0,inp.steer*1.65)); if math.abs(st)>0.003 then local s=math.abs(st); local shaped=s^0.7; local padSt=(st>0 and 1 or -1)*(0.22+shaped*0.68); SetControlNormal(0,59,padSt) end;
+                if inp.throt>0.02 then SetControlNormal(0,71,inp.throt); if IsVehicleOnAllWheels(v) and (inp.clutch or 0)<0.7 and targetGear~=-1 then local d=(targetGear==0) and -1.0 or 1.0; ApplyForceToEntityCenterOfMass(v,1,0.0,d*inp.throt*0.34,0.0,false,true,true,false) end end; if inp.brake>0.02 then if manualMode and targetGear~=0 and GetEntitySpeed(v)<1.5 then SetVehicleHandbrake(v,true) else SetControlNormal(0,72,inp.brake) end elseif (inp.hb or 0.0)<=0.05 then SetVehicleHandbrake(v,false) end
                 if (inp.hb or 0.0) > 0.05 then SetControlNormal(0, 76, inp.hb) end
                 local clutch = inp.clutch or 0.0
                 if manualMode then
