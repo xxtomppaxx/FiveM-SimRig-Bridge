@@ -31,7 +31,7 @@ A full-featured **DirectInput & Force Feedback (FFB) bridge** for **FiveM (GTA V
 
 ### 2. Windows Client (`SimRigBridge.exe`)
 1. Download `SimRigBridge.exe` from [Releases](../../releases) into its own folder.
-2. **Recommended (HidHide):** Hide your wheel, pedals, and handbrake from FiveM using HidHide and whitelist `SimRigBridge.exe` so GTA V does not steal FFB exclusive access.
+2. **Recommended ([HidHide](https://github.com/nefarius/HidHide)):** Install HidHide (`https://github.com/nefarius/HidHide`), hide your wheel, pedals, and handbrake from FiveM on the *Devices* tab, and whitelist `SimRigBridge.exe` on the *Applications* tab so GTA V does not steal FFB exclusive access.
 3. Run `SimRigBridge.exe`, select your FFB wheelbase (e.g., `SW20 V3`), bind your axes/buttons, and keep **Steer Gamma** at **`100%`**.
 4. Launch FiveM and press **`F10`** in-game to open the FFB & gearbox settings menu.
 5. **Important (FFB Direction):** Depending on your wheelbase brand (e.g., Moza), you may need to enable **Invert FFB** in the `F10` menu (or Windows app) if the wheel pulls into turns instead of self-centering.
