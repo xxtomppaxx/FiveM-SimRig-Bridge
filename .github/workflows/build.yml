@@ -1,8 +1,11 @@
-name: Build SimRigBridge
+name: Build and Release SimRigBridge
 on:
   push:
     branches: [ main ]
+    tags: [ 'v*' ]
   workflow_dispatch:
+permissions:
+  contents: write
 jobs:
   build:
     runs-on: windows-latest
@@ -13,8 +16,26 @@ jobs:
           dotnet-version: '8.0.x'
       - name: Publish EXE
         run: dotnet publish SimRigBridge-Source/SimRigBridge.csproj -c Release -o publish
-      - name: Upload EXE
+      - name: Package FiveM Resource
+        shell: pwsh
+        run: Compress-Archive -Path fivem-ffb-bridge -DestinationPath publish/fivem-ffb-bridge.zip -Force
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SimRigBridge-v1.2
-          path: publish/SimRigBridge.exe
+          name: SimRigBridge-v1.0.0
+          path: |
+            publish/SimRigBridge.exe
+            publish/fivem-ffb-bridge.zip
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            publish/SimRigBridge.exe
+            publish/fivem-ffb-bridge.zip
+          name: FiveM SimRig FFB Bridge ${{ github.ref_name }}
+          body: |
+            Virallinen julkaisu **FiveM SimRig FFB Bridge ${{ github.ref_name }}**.
+            - DirectInput Force Feedback (Direct Drive / hihnavetoiset ratit)
+            - Tuki ratille, 3 polkimelle, analogiselle käsijarrulle sekä H-kaavio- ja sekventiaalivaihteistolle
+            - Pelin sisäinen `F10`-säätövalikko ja reaaliaikainen HUD-poljin-/vaihdenäyttö
